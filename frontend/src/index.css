@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 255 255 255;
+    --foreground: 15 23 42;
+    --card: 255 255 255;
+    --card-foreground: 15 23 42;
+    --border: 226 232 240;
+    --input: 226 232 240;
+    --ring: 37 99 235;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 3 7 18;
+    --foreground: 248 250 252;
+    --card: 15 23 42;
+    --card-foreground: 248 250 252;
+    --border: 30 41 59;
+    --input: 30 41 59;
+    --ring: 59 130 246;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-slate-200 dark:border-slate-800;
+  }
+  body {
+    @apply bg-white dark:bg-gray-950 text-slate-900 dark:text-slate-100 antialiased;
+  }
+}
+
+/* 自定义滚动条 */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 2px;
+  }
+  .dark .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #475569;
+  }
+}
+
+/* Markdown 渲染样式 */
+.prose-custom h1,
+.prose-custom h2,
+.prose-custom h3 {
+  @apply font-semibold mt-4 mb-2;
+}
+.prose-custom h1 { @apply text-xl; }
+.prose-custom h2 { @apply text-lg; }
+.prose-custom h3 { @apply text-base; }
+.prose-custom p { @apply mb-2 leading-relaxed; }
+.prose-custom ul { @apply list-disc pl-5 mb-2; }
+.prose-custom ol { @apply list-decimal pl-5 mb-2; }
+.prose-custom code {
+  @apply bg-slate-100 dark:bg-slate-800 rounded px-1.5 py-0.5 text-sm font-mono text-blue-600 dark:text-blue-400;
+}
+.prose-custom pre {
+  @apply bg-slate-100 dark:bg-slate-800 rounded-lg p-4 mb-3 overflow-x-auto;
+}
+.prose-custom pre code {
+  @apply bg-transparent p-0 text-slate-800 dark:text-slate-200;
+}
+.prose-custom blockquote {
+  @apply border-l-4 border-blue-400 pl-4 italic text-slate-600 dark:text-slate-400 my-3;
+}
+.prose-custom strong {
+  @apply font-semibold text-slate-900 dark:text-slate-100;
+}
