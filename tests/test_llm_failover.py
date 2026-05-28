@@ -1,11 +1,12 @@
 """
-测试 LLM 双模型 Failover 机制
+测试 LLM 三模型 Failover 机制
 
 测试项：
-1. DeepSeek 超时/5xx 时自动切换到通义千问
-2. 认证错误（401）不触发切换
-3. 双模型都不可用时抛出 RuntimeError
-4. get_available_providers 正确返回已配置的模型列表
+1. DeepSeek 超时/5xx 时自动切换到 MiMo
+2. MiMo 失败时自动切换到 Qwen
+3. 认证错误（401）不触发切换
+4. 三模型都不可用时抛出异常
+5. get_available_providers 正确返回已配置的模型列表（按优先级顺序）
 """
 
 import sys
@@ -66,17 +67,29 @@ def test_should_failover_connection():
 
 
 @patch("app.services.llm_client.settings")
-def test_providers_both_configured(mock_settings):
+def test_providers_all_configured(mock_settings):
     mock_settings.DEEPSEEK_API_KEY = "sk-deepseek"
+    mock_settings.MIMO_API_KEY = "sk-mimo"
     mock_settings.QWEN_API_KEY = "sk-qwen"
     providers = get_available_providers()
-    assert "deepseek" in providers and "qwen" in providers
-    print(f"PASS: 双模型配置返回 {providers}")
+    assert providers == ["deepseek", "mimo", "qwen"], f"三模型顺序错误: {providers}"
+    print(f"PASS: 三模型配置返回正确顺序 {providers}")
+
+
+@patch("app.services.llm_client.settings")
+def test_providers_only_deepseek_mimo(mock_settings):
+    mock_settings.DEEPSEEK_API_KEY = "sk-deepseek"
+    mock_settings.MIMO_API_KEY = "sk-mimo"
+    mock_settings.QWEN_API_KEY = ""
+    providers = get_available_providers()
+    assert providers == ["deepseek", "mimo"], f"顺序错误: {providers}"
+    print(f"PASS: DeepSeek+MiMo 配置返回 {providers}")
 
 
 @patch("app.services.llm_client.settings")
 def test_providers_only_deepseek(mock_settings):
     mock_settings.DEEPSEEK_API_KEY = "sk-deepseek"
+    mock_settings.MIMO_API_KEY = ""
     mock_settings.QWEN_API_KEY = ""
     providers = get_available_providers()
     assert providers == ["deepseek"]
@@ -86,20 +99,48 @@ def test_providers_only_deepseek(mock_settings):
 @patch("app.services.llm_client.settings")
 def test_providers_none_configured(mock_settings):
     mock_settings.DEEPSEEK_API_KEY = ""
+    mock_settings.MIMO_API_KEY = ""
     mock_settings.QWEN_API_KEY = ""
     providers = get_available_providers()
     assert providers == []
     print(f"PASS: 无配置返回空列表 {providers}")
 
 
-async def test_chat_completion_failover_to_qwen():
-    with patch("app.services.llm_client.get_available_providers", return_value=["deepseek", "qwen"]), \
+async def test_failover_deepseek_to_mimo():
+    """DeepSeek 超时 → MiMo 成功响应"""
+    with patch("app.services.llm_client.get_available_providers", return_value=["deepseek", "mimo", "qwen"]), \
          patch("app.services.llm_client._get_deepseek_client") as mock_ds, \
+         patch("app.services.llm_client._get_mimo_client") as mock_mimo:
+
+        mock_ds_client = MagicMock()
+        mock_ds.return_value = mock_ds_client
+        mock_ds_client.chat.completions.create = AsyncMock(side_effect=APITimeoutError(request=_MOCK_REQ))
+
+        mock_mimo_client = MagicMock()
+        mock_mimo.return_value = mock_mimo_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="MiMo response"))]
+        mock_mimo_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        result = await chat_completion(messages=[{"role": "user", "content": "hello"}])
+        assert result == "MiMo response"
+        print("PASS: DeepSeek 超时 → MiMo 自动切换成功")
+
+
+async def test_failover_deepseek_to_mimo_to_qwen():
+    """DeepSeek 超时 → MiMo 超时 → Qwen 成功响应"""
+    with patch("app.services.llm_client.get_available_providers", return_value=["deepseek", "mimo", "qwen"]), \
+         patch("app.services.llm_client._get_deepseek_client") as mock_ds, \
+         patch("app.services.llm_client._get_mimo_client") as mock_mimo, \
          patch("app.services.llm_client._get_qwen_client") as mock_qw:
 
         mock_ds_client = MagicMock()
         mock_ds.return_value = mock_ds_client
         mock_ds_client.chat.completions.create = AsyncMock(side_effect=APITimeoutError(request=_MOCK_REQ))
+
+        mock_mimo_client = MagicMock()
+        mock_mimo.return_value = mock_mimo_client
+        mock_mimo_client.chat.completions.create = AsyncMock(side_effect=APITimeoutError(request=_MOCK_REQ))
 
         mock_qw_client = MagicMock()
         mock_qw.return_value = mock_qw_client
@@ -109,11 +150,12 @@ async def test_chat_completion_failover_to_qwen():
 
         result = await chat_completion(messages=[{"role": "user", "content": "hello"}])
         assert result == "Qwen response"
-        print("PASS: DeepSeek 超时后自动切换到 Qwen 并成功返回")
+        print("PASS: DeepSeek → MiMo → Qwen 三级切换成功")
 
 
 async def test_chat_completion_auth_no_failover():
-    with patch("app.services.llm_client.get_available_providers", return_value=["deepseek", "qwen"]), \
+    """认证错误不应触发 failover"""
+    with patch("app.services.llm_client.get_available_providers", return_value=["deepseek", "mimo", "qwen"]), \
          patch("app.services.llm_client._get_deepseek_client") as mock_ds:
 
         mock_ds_client = MagicMock()
@@ -129,15 +171,20 @@ async def test_chat_completion_auth_no_failover():
             print("PASS: 认证错误不触发 failover，直接抛出异常")
 
 
-async def test_chat_completion_both_unavailable():
-    from openai import APITimeoutError
-    with patch("app.services.llm_client.get_available_providers", return_value=["deepseek", "qwen"]), \
+async def test_chat_completion_all_unavailable():
+    """三模型都不可用时抛出异常"""
+    with patch("app.services.llm_client.get_available_providers", return_value=["deepseek", "mimo", "qwen"]), \
          patch("app.services.llm_client._get_deepseek_client") as mock_ds, \
+         patch("app.services.llm_client._get_mimo_client") as mock_mimo, \
          patch("app.services.llm_client._get_qwen_client") as mock_qw:
 
         mock_ds_client = MagicMock()
         mock_ds.return_value = mock_ds_client
         mock_ds_client.chat.completions.create = AsyncMock(side_effect=APITimeoutError(request=_MOCK_REQ))
+
+        mock_mimo_client = MagicMock()
+        mock_mimo.return_value = mock_mimo_client
+        mock_mimo_client.chat.completions.create = AsyncMock(side_effect=APITimeoutError(request=_MOCK_REQ))
 
         mock_qw_client = MagicMock()
         mock_qw.return_value = mock_qw_client
@@ -147,12 +194,12 @@ async def test_chat_completion_both_unavailable():
             await chat_completion(messages=[{"role": "user", "content": "hello"}])
             assert False
         except APITimeoutError:
-            print("PASS: 双模型都不可用时抛出异常（最后一个提供商的原始异常）")
+            print("PASS: 三模型都不可用时抛出异常")
 
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("LLM 双模型 Failover 测试")
+    print("LLM 三模型 Failover 测试")
     print("=" * 60)
 
     print("\n--- 测试 1: _should_failover 判断逻辑 ---")
@@ -164,14 +211,16 @@ if __name__ == "__main__":
     test_should_failover_connection()
 
     print("\n--- 测试 2: get_available_providers ---")
-    test_providers_both_configured()
+    test_providers_all_configured()
+    test_providers_only_deepseek_mimo()
     test_providers_only_deepseek()
     test_providers_none_configured()
 
     print("\n--- 测试 3: chat_completion failover 行为 ---")
-    asyncio.run(test_chat_completion_failover_to_qwen())
+    asyncio.run(test_failover_deepseek_to_mimo())
+    asyncio.run(test_failover_deepseek_to_mimo_to_qwen())
     asyncio.run(test_chat_completion_auth_no_failover())
-    asyncio.run(test_chat_completion_both_unavailable())
+    asyncio.run(test_chat_completion_all_unavailable())
 
     print("\n" + "=" * 60)
     print("所有 LLM Failover 测试通过!")

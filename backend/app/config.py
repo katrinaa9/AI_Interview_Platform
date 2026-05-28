@@ -24,14 +24,19 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60 * 24  # 24 小时
 
-    # DeepSeek API (主模型)
+    # DeepSeek API (主模型 - 第一优先级)
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
 
-    # 通义千问 Qwen (备用模型 - DashScope OpenAI 兼容接口)
+    # 小米 MiMo (第二优先级 - 备用模型)
+    MIMO_API_KEY: str = ""
+    MIMO_BASE_URL: str = "https://api.mimo-v2.com/v1"
+    MIMO_MODEL_NAME: str = "mimo-v2.5"
+
+    # 通义千问 Qwen (第三优先级 - DashScope OpenAI 兼容接口)
     QWEN_API_KEY: str = ""
     QWEN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    QWEN_MODEL_NAME: str = "qwen-plus"
+    QWEN_MODEL_NAME: str = "qwen-max"
 
     @property
     def DATABASE_URL(self) -> str:

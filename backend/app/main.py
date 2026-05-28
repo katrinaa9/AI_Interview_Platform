@@ -30,15 +30,17 @@ async def lifespan(app: FastAPI):
     # 2. 并发槽位管理器
     await init_slot_manager()
 
-    # 3. LLM 客户端预检（双模型）
+    # 3. LLM 客户端预检（三模型）
     from app.services.llm_client import get_available_providers
     providers = get_available_providers()
     if providers:
         logger.info(f"LLM 提供商就绪: {', '.join(providers)} | Failover 策略: {' → '.join(providers)}")
         if "deepseek" in providers:
-            logger.info(f"  DeepSeek: {settings.DEEPSEEK_BASE_URL} (model=deepseek-chat)")
+            logger.info(f"  DeepSeek (P1): {settings.DEEPSEEK_BASE_URL} (model=deepseek-chat)")
+        if "mimo" in providers:
+            logger.info(f"  MiMo (P2): {settings.MIMO_BASE_URL} (model={settings.MIMO_MODEL_NAME})")
         if "qwen" in providers:
-            logger.info(f"  通义千问: {settings.QWEN_BASE_URL} (model={settings.QWEN_MODEL_NAME})")
+            logger.info(f"  Qwen (P3): {settings.QWEN_BASE_URL} (model={settings.QWEN_MODEL_NAME})")
     else:
         logger.warning("未配置任何 LLM API Key，AI 功能将降级为 Mock 模式")
 

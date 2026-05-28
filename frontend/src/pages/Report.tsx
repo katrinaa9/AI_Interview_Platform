@@ -15,7 +15,7 @@ export default function Report() {
   const { token, sessionId, session } = useAppStore();
 
   const [report, setReport] = useState<EvaluationReport | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!sessionId);
   const [error, setError] = useState("");
   const [activeSessionId, setActiveSessionId] = useState<string>(sessionId || "");
 
@@ -78,7 +78,7 @@ export default function Report() {
 
     fetchReport();
     return () => { cancelled = true; };
-  }, [activeSessionId, authHeaders]);
+  }, [activeSessionId, authHeaders, historyLoading]);
 
   const scoreValues = Object.values(report?.radar_scores ?? {}).filter(
     (v) => typeof v === "number"

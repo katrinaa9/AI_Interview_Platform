@@ -1,13 +1,17 @@
 """
-双模型 LLM 客户端（DeepSeek 主 + 通义千问备）
+三模型 LLM 客户端（DeepSeek 主 + MiMo 备 + Qwen 备）
+
+Failover 优先级顺序：
+1. DeepSeek（第一优先级，成本最优）
+2. MiMo v2.5（第二优先级，小米模型）
+3. Qwen（第三优先级，通义千问）
 
 Failover 策略：
-1. 默认使用 DeepSeek
-2. 如果 DeepSeek 请求失败（超时/5xx/连接错误），自动切换到通义千问
-3. 认证错误（API Key 无效）不触发 Failover
-4. 两个模型都不可用时，抛出 RuntimeError
+- 当前优先级模型请求失败（超时/5xx/连接错误），自动切换到下一优先级
+- 认证错误（API Key 无效）不触发 Failover，直接抛出
+- 所有模型都不可用时，抛出 RuntimeError
 
-通义千问通过 DashScope 的 OpenAI 兼容接口调用，无需额外 SDK。
+MiMo 通过 OpenAI 兼容接口调用，Qwen 通过 DashScope OpenAI 兼容接口调用，均无需额外 SDK。
 """
 
 import logging
@@ -29,8 +33,9 @@ DEEPSEEK_MODEL = "deepseek-chat"
 # 可触发 Failover 的异常类型（超时、服务端错误、连接问题）
 FAILOVER_EXCEPTIONS = (APITimeoutError, RateLimitError, ConnectionError, TimeoutError)
 
-# 双客户端单例
+# 三客户端单例
 _deepseek_client: Optional[AsyncOpenAI] = None
+_mimo_client: Optional[AsyncOpenAI] = None
 _qwen_client: Optional[AsyncOpenAI] = None
 
 
@@ -49,6 +54,21 @@ def _get_deepseek_client() -> Optional[AsyncOpenAI]:
     return _deepseek_client
 
 
+def _get_mimo_client() -> Optional[AsyncOpenAI]:
+    global _mimo_client
+    if _mimo_client is None:
+        if not settings.MIMO_API_KEY:
+            return None
+        _mimo_client = AsyncOpenAI(
+            api_key=settings.MIMO_API_KEY,
+            base_url=settings.MIMO_BASE_URL,
+            timeout=45.0,
+            max_retries=1,
+        )
+        logger.info(f"MiMo 客户端已初始化: {settings.MIMO_BASE_URL} | model={settings.MIMO_MODEL_NAME}")
+    return _mimo_client
+
+
 def _get_qwen_client() -> Optional[AsyncOpenAI]:
     global _qwen_client
     if _qwen_client is None:
@@ -65,19 +85,25 @@ def _get_qwen_client() -> Optional[AsyncOpenAI]:
 
 
 def get_available_providers() -> list[str]:
+    """返回已配置的 provider 列表（按优先级顺序：DeepSeek → MiMo → Qwen）"""
     providers = []
     if settings.DEEPSEEK_API_KEY:
         providers.append("deepseek")
+    if settings.MIMO_API_KEY:
+        providers.append("mimo")
     if settings.QWEN_API_KEY:
         providers.append("qwen")
     return providers
 
 
 async def close_http_client():
-    global _deepseek_client, _qwen_client
+    global _deepseek_client, _mimo_client, _qwen_client
     if _deepseek_client is not None:
         await _deepseek_client.close()
         _deepseek_client = None
+    if _mimo_client is not None:
+        await _mimo_client.close()
+        _mimo_client = None
     if _qwen_client is not None:
         await _qwen_client.close()
         _qwen_client = None
@@ -102,17 +128,18 @@ async def chat_completion(
 ) -> str:
     providers = get_available_providers()
     if not providers:
-        raise ValueError("未配置任何 LLM API Key，请在 .env 中设置 DEEPSEEK_API_KEY 或 QWEN_API_KEY")
+        raise ValueError("未配置任何 LLM API Key，请在 .env 中设置 DEEPSEEK_API_KEY、MIMO_API_KEY 或 QWEN_API_KEY")
 
     last_error: Optional[Exception] = None
 
-    for provider in providers:
+    for i, provider in enumerate(providers):
         try:
             return await _call_provider(provider, messages, model, temperature, max_tokens)
         except Exception as e:
             last_error = e
-            if provider == "deepseek" and "qwen" in providers and _should_failover(e):
-                logger.warning(f"DeepSeek 请求失败，正在切换到通义千问 | 错误: {type(e).__name__}: {e}")
+            # 非最后一个 provider 且可 failover 时，尝试下一个
+            if i < len(providers) - 1 and _should_failover(e):
+                logger.warning(f"[{provider}] 请求失败，切换到 {providers[i+1]} | 错误: {type(e).__name__}: {e}")
                 continue
             raise
 
@@ -133,6 +160,9 @@ async def _call_provider(
     if provider == "deepseek":
         client = _get_deepseek_client()
         actual_model = model or DEEPSEEK_MODEL
+    elif provider == "mimo":
+        client = _get_mimo_client()
+        actual_model = settings.MIMO_MODEL_NAME
     else:
         client = _get_qwen_client()
         actual_model = settings.QWEN_MODEL_NAME
@@ -195,19 +225,20 @@ async def chat_completion_stream(
 ) -> AsyncGenerator[str, None]:
     providers = get_available_providers()
     if not providers:
-        raise ValueError("未配置任何 LLM API Key，请在 .env 中设置 DEEPSEEK_API_KEY 或 QWEN_API_KEY")
+        raise ValueError("未配置任何 LLM API Key，请在 .env 中设置 DEEPSEEK_API_KEY、MIMO_API_KEY 或 QWEN_API_KEY")
 
     last_error: Optional[Exception] = None
 
-    for provider in providers:
+    for i, provider in enumerate(providers):
         try:
             async for chunk in _stream_provider(provider, messages, model, temperature, max_tokens):
                 yield chunk
             return
         except Exception as e:
             last_error = e
-            if provider == "deepseek" and "qwen" in providers and _should_failover(e):
-                logger.warning(f"DeepSeek 流式请求失败，切换到通义千问 | 错误: {type(e).__name__}: {e}")
+            # 非最后一个 provider 且可 failover 时，尝试下一个
+            if i < len(providers) - 1 and _should_failover(e):
+                logger.warning(f"[{provider}] 流式请求失败，切换到 {providers[i+1]} | 错误: {type(e).__name__}: {e}")
                 continue
             raise
 
@@ -229,6 +260,9 @@ async def _stream_provider(
     if provider == "deepseek":
         client = _get_deepseek_client()
         actual_model = model or DEEPSEEK_MODEL
+    elif provider == "mimo":
+        client = _get_mimo_client()
+        actual_model = settings.MIMO_MODEL_NAME
     else:
         client = _get_qwen_client()
         actual_model = settings.QWEN_MODEL_NAME
