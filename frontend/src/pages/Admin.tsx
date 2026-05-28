@@ -525,18 +525,20 @@ function DocumentsTab({ authHeaders, authHeadersNoCT, setToast }: { authHeaders:
   const [loadingChunks, setLoadingChunks] = useState(false);
   const [deleteDocTarget, setDeleteDocTarget] = useState<DocumentItem | null>(null);
   const fetchingRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const docsRef = useRef<{ items: DocumentItem[]; total: number } | null>(null);
 
-  const fetchDocs = useCallback(async () => {
-    if (fetchingRef.current) return;
+  const fetchDocs = useCallback(async (force = false) => {
+    if (fetchingRef.current && !force) return;
     fetchingRef.current = true;
-    setLoading(true);
+    if (!docsRef.current) setLoading(true);
     try {
       const res = await fetch("/api/admin/documents?page_size=50", { headers: authHeaders() });
-      if (res.status === 429) {
-        console.warn("Rate limit exceeded on documents fetch");
-        return;
+      if (res.ok) {
+        const data = await res.json();
+        docsRef.current = data;
+        setDocs(data);
       }
-      if (res.ok) setDocs(await res.json());
     } catch { /* silent */ } finally {
       setLoading(false);
       fetchingRef.current = false;
@@ -545,24 +547,60 @@ function DocumentsTab({ authHeaders, authHeadersNoCT, setToast }: { authHeaders:
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
+  useEffect(() => {
+    if (!docs) return;
+    const hasPending = docs.items.some(d => d.status === "pending" || d.status === "processing");
+    if (hasPending) {
+      pollTimerRef.current = setTimeout(() => fetchDocs(true), 3000);
+    }
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, [docs, fetchDocs]);
+
   const handleUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
       const formData = new FormData();
+      let newDocs: DocumentItem[] = [];
+
       if (files.length === 1) {
         formData.append("file", files[0]);
         const res = await fetch("/api/admin/documents/upload", { method: "POST", headers: authHeadersNoCT(), body: formData });
-        if (!res.ok) throw new Error((await res.json()).detail || "上传失败");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.detail || "上传失败");
+        }
+        const doc: DocumentItem = await res.json();
+        newDocs = [doc];
         setToast({ message: `✅ ${files[0].name} 已上传，正在后台处理`, type: "success" });
       } else {
         for (const f of files) formData.append("files", f);
         const res = await fetch("/api/admin/documents/upload/batch", { method: "POST", headers: authHeadersNoCT(), body: formData });
-        if (!res.ok) throw new Error((await res.json()).detail || "批量上传失败");
-        setToast({ message: `✅ ${files.length} 个文件已上传`, type: "success" });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.detail || "批量上传失败");
+        }
+        newDocs = await res.json();
+        setToast({ message: `✅ ${files.length} 个文件已上传，正在后台处理`, type: "success" });
       }
-      fetchDocs();
-    } catch (e: any) { setToast({ message: e.message, type: "error" }); } finally { setUploading(false); }
+
+      if (newDocs.length > 0) {
+        setDocs(prev => {
+          const existing = prev?.items || [];
+          const existingIds = new Set(newDocs.map(d => d.id));
+          const filtered = existing.filter(d => !existingIds.has(d.id));
+          return { items: [...newDocs, ...filtered], total: (prev?.total || 0) + newDocs.length };
+        });
+      }
+
+      setTimeout(() => fetchDocs(true), 1500);
+    } catch (e: any) {
+      setToast({ message: `❌ ${e.message}`, type: "error" });
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleDeleteDoc = async (docId: string) => {
@@ -572,26 +610,46 @@ function DocumentsTab({ authHeaders, authHeadersNoCT, setToast }: { authHeaders:
       setToast({ message: "✅ 文档已删除", type: "success" });
       setDeleteDocTarget(null);
       if (selectedDoc?.id === docId) { setSelectedDoc(null); setChunks([]); }
-      fetchDocs();
+      setDocs(prev => prev ? {
+        items: prev.items.filter(d => d.id !== docId),
+        total: prev.total - 1,
+      } : null);
     } catch { setToast({ message: "删除失败", type: "error" }); }
   };
 
   const handleReprocess = async (docId: string) => {
     try {
       const res = await fetch(`/api/admin/documents/reprocess/${docId}`, { method: "POST", headers: authHeaders() });
-      if (!res.ok) throw new Error((await res.json()).detail || "处理失败");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.detail || "处理失败");
+      }
       setToast({ message: "✅ 已开始重新处理", type: "success" });
-      fetchDocs();
-    } catch (e: any) { setToast({ message: e.message, type: "error" }); }
+      fetchDocs(true);
+    } catch (e: any) { setToast({ message: `❌ ${e.message}`, type: "error" }); }
   };
 
   const viewChunks = async (doc: DocumentItem) => {
     setSelectedDoc(doc);
     setLoadingChunks(true);
+    setChunks([]); // 清空旧数据
     try {
       const res = await fetch(`/api/admin/documents/${doc.id}/chunks?page_size=100`, { headers: authHeaders() });
-      if (res.ok) { const data = await res.json(); setChunks(data.items); }
-    } catch { /* silent */ } finally { setLoadingChunks(false); }
+      if (!res.ok) {
+        throw new Error(`获取知识片段失败 (${res.status})`);
+      }
+      const data = await res.json();
+      setChunks(data.items || []);
+      
+      if (!data.items || data.items.length === 0) {
+        setToast({ message: `⚠️ 该文档暂无知识片段`, type: "success" });
+      }
+    } catch (e: any) {
+      setToast({ message: `❌ ${e.message}`, type: "error" });
+      setChunks([]);
+    } finally {
+      setLoadingChunks(false);
+    }
   };
 
   return (
@@ -602,7 +660,7 @@ function DocumentsTab({ authHeaders, authHeadersNoCT, setToast }: { authHeaders:
           <p className="text-sm text-slate-500">上传文档自动解析为知识片段，支持 PDF / TXT / MD 格式</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={fetchDocs}><RefreshCw className="h-3.5 w-3.5 mr-1" />刷新</Button>
+          <Button variant="outline" size="sm" onClick={() => fetchDocs()}><RefreshCw className="h-3.5 w-3.5 mr-1" />刷新</Button>
           <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" multiple className="hidden" onChange={(e) => { handleUpload(e.target.files); e.target.value = ""; }} />
           <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
             {uploading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Upload className="h-4 w-4 mr-1" />}

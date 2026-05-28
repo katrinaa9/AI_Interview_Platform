@@ -51,7 +51,7 @@ _SYSTEM_PROMPT_TEMPLATE = """你是一位资深技术面试官，负责对候选
 - 面试考察重点：{focus_areas}
 
 ## 候选人背景
-候选人简历中的技术栈关键词：{keywords}
+{candidate_name_info}候选人简历中的技术栈关键词：{keywords}
 {position_guidance}
 
 ## 面试流程规则
@@ -147,6 +147,8 @@ def get_system_prompt(
     turn: int = 1,
     max_turns: int | None = None,
     position_name: str | None = None,
+    candidate_name: str | None = None,
+    resume_full_text: str | None = None,
 ) -> str:
     """
     构建面试系统 Prompt（每次对话请求时调用）。
@@ -159,6 +161,8 @@ def get_system_prompt(
         turn: 当前轮次（用户已发送的消息数+1）
         max_turns: 最大对话轮次（None 时从配置文件读取）
         position_name: 求职岗位名称（None 时使用通用面试方向）
+        candidate_name: 候选人姓名（None 时不显示）
+        resume_full_text: 完整简历文本（用于 AI 全面了解候选人背景）
     """
     type_config = INTERVIEW_TYPES.get(interview_type, INTERVIEW_TYPES["technical"])
     keywords_str = "、".join(keywords) if keywords else "通用软件开发"
@@ -173,6 +177,22 @@ def get_system_prompt(
 
     # 生成进度提示
     progress_hint = get_progress_hint(turn, max_turns)
+
+    # ---- 候选人姓名 ----
+    candidate_name_info = f"候选人姓名：{candidate_name}\n" if candidate_name else ""
+
+    # ---- 完整简历文本 ----
+    if resume_full_text and resume_full_text.strip():
+        # 截取前 3000 字符，避免 token 过长
+        resume_snippet = resume_full_text[:3000].strip()
+        resume_section = (
+            f"\n\n## 候选人完整简历\n"
+            f"以下是候选人的完整简历内容，请仔细阅读并基于此进行针对性提问：\n\n"
+            f"```\n{resume_snippet}\n```\n"
+        )
+        logger.info(f"System Prompt 已注入完整简历文本 | 长度={len(resume_snippet)}")
+    else:
+        resume_section = ""
 
     # ---- 岗位分析：生成针对性提问指导 ----
     if position_name:
@@ -203,6 +223,7 @@ def get_system_prompt(
         style_instruction=_STYLE_INSTRUCTIONS.get(interview_type, _STYLE_INSTRUCTIONS["technical"]),
         focus_areas=type_config["focus"],
         keywords=keywords_str,
+        candidate_name_info=candidate_name_info,
         position_guidance=position_guidance,
         turn=turn,
         max_turns=max_turns,
@@ -210,7 +231,7 @@ def get_system_prompt(
         global_instructions=global_instructions,
         progress_hint=progress_hint,
         conversation_tone=_CONVERSATION_TONES.get(interview_type, _CONVERSATION_TONES["technical"]),
-    )
+    ) + resume_section
 
 
 def build_messages(
@@ -242,6 +263,8 @@ async def build_welcome_message(
     keywords: list[str],
     interview_type: str = "technical",
     position_name: str | None = None,
+    candidate_name: str | None = None,
+    resume_full_text: str | None = None,
 ) -> str:
     """生成面试开场白。优先 LLM，不可用时用模板。
 
@@ -249,6 +272,8 @@ async def build_welcome_message(
         keywords: 技术栈关键词列表
         interview_type: 面试类型
         position_name: 求职岗位名称（用于生成岗位定向的开场白）
+        candidate_name: 候选人姓名（用于在开场白中称呼候选人）
+        resume_full_text: 完整简历文本（用于 LLM 生成更精准的开场白）
     """
     type_config = INTERVIEW_TYPES.get(interview_type, INTERVIEW_TYPES["technical"])
     keywords_str = "、".join(keywords) if keywords else "通用软件开发"
@@ -272,15 +297,31 @@ async def build_welcome_message(
         position_context = ""
         position_requirement = "自然地邀请候选人做自我介绍"
 
+    # 构建姓名相关的上下文
+    name_context = f"候选人姓名：{candidate_name}\n" if candidate_name else ""
+
+    # 构建完整简历上下文（用于 LLM 生成更精准的开场白）
+    resume_context = ""
+    if resume_full_text and resume_full_text.strip():
+        # 截取前 1500 字符，避免 token 过长
+        resume_snippet = resume_full_text[:1500].strip()
+        resume_context = f"\n候选人完整简历内容：\n{resume_snippet}\n"
+        logger.info(f"开场白已注入完整简历文本 | 长度={len(resume_snippet)}")
+
     if settings.DEEPSEEK_API_KEY:
         try:
+            # 构建增强的 LLM Prompt，包含完整简历信息
+            enhanced_prompt = _WELCOME_LLM_PROMPT.format(
+                keywords=keywords_str,
+                position_context=position_context + name_context,
+                position_requirement=position_requirement,
+                interview_label=type_config["label"],
+            )
+            if resume_context:
+                enhanced_prompt += resume_context
+            
             welcome_messages = [
-                {"role": "user", "content": _WELCOME_LLM_PROMPT.format(
-                    keywords=keywords_str,
-                    position_context=position_context,
-                    position_requirement=position_requirement,
-                    interview_label=type_config["label"],
-                )}
+                {"role": "user", "content": enhanced_prompt}
             ]
             welcome_text = await _llm_chat(messages=welcome_messages, temperature=0.7, max_tokens=256)
             if welcome_text and welcome_text.strip():
@@ -289,20 +330,21 @@ async def build_welcome_message(
             logger.warning(f"LLM 开场白生成失败，降级: {e}")
 
     # 模板降级
+    name_greeting = f"{candidate_name}，" if candidate_name else ""
     position_prefix = f"我看到你的求职目标是 **{position_name}**，" if position_name else ""
     templates = {
         "technical": (
-            f"你好！我是今天的AI面试官，很高兴能和你进行这次技术面试。"
+            f"{name_greeting}你好！我是今天的AI面试官，很高兴能和你进行这次技术面试。"
             f"{position_prefix}我注意到你的技术栈涵盖了 {keywords_str} 等领域，"
             f"我会围绕这些方向和你深入交流。请先简单介绍一下你自己，包括你的技术专长和项目经验。"
         ),
         "pressure": (
-            f"你好，我是今天负责压力面试的面试官。"
+            f"{name_greeting}你好，我是今天负责压力面试的面试官。"
             f"{position_prefix}我看到你的简历涉及 {keywords_str}，今天的面试会比较有挑战性——"
             f"我会对你的技术深度的边界进行追问。准备好了吗？请先做一下自我介绍。"
         ),
         "friendly": (
-            f"嗨！欢迎参加今天的面试，轻松聊一聊就好。"
+            f"嗨{name_greeting}欢迎参加今天的面试，轻松聊一聊就好。"
             f"{position_prefix}我看到你在 {keywords_str} 方面有不错的经验，我对你的项目经历很感兴趣。"
             f"先简单介绍一下你自己吧，聊聊你做过的有意思的项目！"
         ),

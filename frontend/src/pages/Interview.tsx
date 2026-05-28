@@ -77,6 +77,7 @@ export default function Interview() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const retryCountRef = useRef(0);
+  const sessionInitRef = useRef(false);
 
   const {
     keywords,
@@ -128,7 +129,8 @@ export default function Interview() {
       navigate("/upload");
       return;
     }
-    if (sessionId && messages.length > 0) return;
+    if (sessionInitRef.current) return;
+    sessionInitRef.current = true;
 
     const initSession = async () => {
       clearMessages();
@@ -150,15 +152,16 @@ export default function Interview() {
         const data = await res.json();
         setSessionId(data.id);
 
-        const techStr = keywords.slice(0, 5).join("、");
+        // 使用后端返回的开场白，避免重复
+        const welcomeText = data.welcome_message || `你好！我是今天的面试官。请做一个简短的**自我介绍**，包括你的技术背景和最有代表性的项目经历。`;
         addMessage({
           role: "assistant",
-          content: `你好，我是今天的面试官。我已经仔细阅读了你的简历，注意到你的技术栈主要集中在 **${techStr}** 方面。\n\n本次面试会围绕这些技术领域展开，从基础概念到项目实践，逐步深入。准备好了的话，先从第一个问题开始——请做一个简短的**自我介绍**，包括你的技术背景和你最有代表性的一个项目经历。`,
+          content: welcomeText,
         });
       } catch (err: any) {
         console.error("创建面试会话失败:", err);
         addToast("error", "创建面试会话失败，请检查后端服务是否启动");
-        // 降级本地开场白
+        // 降级本地开场白（仅作为 fallback，不会重复触发）
         addMessage({
           role: "assistant",
           content: `你好！我是今天的面试官。我已经仔细阅读了你的简历。\n\n首先，请做一个简短的**自我介绍**吧——包括你的技术背景、项目经验和你认为自己最擅长的技术领域。`,

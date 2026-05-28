@@ -45,8 +45,18 @@ export interface EvaluationReport {
   radar_scores: RadarScores;
   ai_feedback: AIFeedback;
   created_at: string;
-  // 面试元数据（直接从API返回）
   interview_date?: string;
   interview_duration?: string;
   interview_type?: string;
+}
+
+export interface ReportHistoryItem {
+  session_id: string;
+  interview_type: string;
+  type_label: string;
+  started_at: string | null;
+  ended_at: string | null;
+  duration: string;
+  average_score: number | null;
+  has_report: boolean;
 }

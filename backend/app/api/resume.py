@@ -47,16 +47,18 @@ async def upload_resume(
     extracted_keywords: list[str] = []
     raw_text: str = ""
     position_name: str | None = None
+    candidate_name: str | None = None
     freq_data: dict = {}
     parse_success = False
 
     try:
-        raw_text, extracted_keywords, freq_data, position_name = (
+        raw_text, extracted_keywords, freq_data, position_name, candidate_name = (
             await asyncio.to_thread(parse_pdf, content)
         )
         parse_success = True
         logger.info(
             f"简历解析成功 | 用户={current_user.username} | "
+            f"姓名={candidate_name or '未识别'} | "
             f"关键词数量={len(extracted_keywords)} | "
             f"岗位={position_name or '未识别'} | "
             f"Top5={extracted_keywords[:5]}"
@@ -90,6 +92,7 @@ async def upload_resume(
             "keywords": extracted_keywords,
             "frequencies": freq_data,
             "position": position_name,
+            "candidate_name": candidate_name,
         },
         raw_text=raw_text,
     )
@@ -100,7 +103,8 @@ async def upload_resume(
     # ===== 构建响应 =====
     if parse_success and extracted_keywords:
         pos_suffix = f"，目标岗位：{position_name}" if position_name else ""
-        message = f"简历解析成功，识别到 {len(extracted_keywords)} 个技术栈关键词{pos_suffix}"
+        name_prefix = f"候选人：{candidate_name}，" if candidate_name else ""
+        message = f"{name_prefix}简历解析成功，识别到 {len(extracted_keywords)} 个技术栈关键词{pos_suffix}"
     elif parse_success and not extracted_keywords:
         message = "简历已解析，但未识别到技术栈关键词，请手动选择"
     else:

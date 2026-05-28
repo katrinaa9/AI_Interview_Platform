@@ -46,8 +46,26 @@ export const useAppStore = create<AppState>((set) => ({
 
   user: null,
   token: null,
-  setAuth: (user, token) => set({ user, token }),
-  logout: () => set({ user: null, token: null }),
+  setAuth: (user, token) =>
+    set({
+      user,
+      token,
+      keywords: [],
+      sessionId: null,
+      session: null,
+      messages: [],
+      isStreaming: false,
+    }),
+  logout: () =>
+    set({
+      user: null,
+      token: null,
+      keywords: [],
+      sessionId: null,
+      session: null,
+      messages: [],
+      isStreaming: false,
+    }),
 
   keywords: [],
   setKeywords: (keywords) => set({ keywords }),

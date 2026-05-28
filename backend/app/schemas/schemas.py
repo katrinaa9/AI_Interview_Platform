@@ -105,6 +105,7 @@ class InterviewSessionResponse(BaseModel):
     interview_type: str
     started_at: datetime
     ended_at: Optional[datetime] = None
+    welcome_message: Optional[str] = None
 
 
 class ChatMessageRequest(BaseModel):

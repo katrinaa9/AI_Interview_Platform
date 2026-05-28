@@ -18,7 +18,6 @@ from app.services.rag_engine import retrieve_questions
 from app.services.prompt_builder import (
     build_messages,
     build_welcome_message,
-    build_simple_welcome,
     get_system_prompt,
     get_max_turns,
     DEFAULT_MAX_TURNS,
@@ -34,8 +33,8 @@ router = APIRouter(prefix="/api/interview", tags=["面试间"])
 
 # ===== 辅助函数 =====
 
-async def _get_user_keywords(user_id: str, db: AsyncSession) -> tuple[list[str], str | None]:
-    """获取用户最新简历的关键词和求职岗位"""
+async def _get_user_resume_data(user_id: str, db: AsyncSession) -> tuple[list[str], str | None, str | None, str | None]:
+    """获取用户最新简历的关键词、求职岗位、候选人姓名和完整简历文本"""
     result = await db.execute(
         select(Resume)
         .where(Resume.user_id == user_id)
@@ -43,13 +42,17 @@ async def _get_user_keywords(user_id: str, db: AsyncSession) -> tuple[list[str],
         .limit(1)
     )
     resume = result.scalar_one_or_none()
-    if resume and resume.parsed_keywords:
-        kw_data = resume.parsed_keywords
-        if isinstance(kw_data, dict):
-            keywords = kw_data.get("keywords", [])
-            position = kw_data.get("position")
-            return keywords, position
-    return [], None
+    if resume:
+        keywords = []
+        position = None
+        candidate_name = None
+        if resume.parsed_keywords and isinstance(resume.parsed_keywords, dict):
+            keywords = resume.parsed_keywords.get("keywords", [])
+            position = resume.parsed_keywords.get("position")
+            candidate_name = resume.parsed_keywords.get("candidate_name")
+        raw_text = resume.raw_text if resume.raw_text else None
+        return keywords, position, candidate_name, raw_text
+    return [], None, None, None
 
 
 # ===== 路由 =====
@@ -81,17 +84,25 @@ async def start_interview(
             f"自动关闭旧会话 | id={old.id} | user={current_user.username}"
         )
 
-    # 获取用户简历关键词
-    keywords, position_name = await _get_user_keywords(current_user.id, db)
+    # 获取用户简历完整数据（关键词 + 完整文本）
+    keywords, position_name, candidate_name, raw_text = await _get_user_resume_data(current_user.id, db)
 
     # 尝试 LLM 生成个性化开场白，失败时使用模板
     try:
         welcome_text = await build_welcome_message(
-            keywords, body.interview_type, position_name
+            keywords, body.interview_type, position_name, candidate_name, raw_text
         )
     except Exception as e:
         logger.warning(f"个性化开场白生成失败，降级使用模板: {e}")
-        welcome_text = build_simple_welcome(keywords, body.interview_type)
+        name_greeting = f"{candidate_name}，" if candidate_name else ""
+        kw = keywords[:6] if keywords else ["软件开发"]
+        kw_str = "、".join(kw)
+        pos_prefix = f"我看到你的求职目标是 **{position_name}**，" if position_name else ""
+        welcome_text = (
+            f"{name_greeting}你好！我是今天的AI面试官。"
+            f"{pos_prefix}我注意到你的技术栈涵盖了 {kw_str} 等领域。"
+            f"请先简单介绍一下你自己。"
+        )
 
     # 创建会话
     session = InterviewSession(
@@ -117,6 +128,7 @@ async def start_interview(
         status=session.status,
         interview_type=session.interview_type,
         started_at=session.started_at,
+        welcome_message=welcome_text,
     )
 
 
@@ -164,8 +176,8 @@ async def chat(
             detail=f"面试已达到最大轮次（{max_turns}轮），请结束当前面试并查看评估报告",
         )
 
-    # ===== 前置操作：获取简历数据 + 保存用户消息（槽位之前，失败不泄漏） =====
-    keywords, position_name = await _get_user_keywords(current_user.id, db)
+    # ===== 前置操作：获取简历完整数据 + 保存用户消息（槽位之前，失败不泄漏） =====
+    keywords, position_name, candidate_name, raw_text = await _get_user_resume_data(current_user.id, db)
 
     history_messages.append({"role": "user", "content": body.content})
     dialogue["messages"] = history_messages
@@ -204,6 +216,8 @@ async def chat(
                 turn=next_turn,
                 max_turns=max_turns,
                 position_name=position_name,
+                candidate_name=candidate_name,
+                resume_full_text=raw_text,
             )
 
             rag_context = ""
@@ -342,8 +356,8 @@ async def end_interview(
 
     # 生成新报告
     try:
-        # 获取关键词
-        keywords, position_name = await _get_user_keywords(current_user.id, db)
+        # 获取关键词（用于评估）
+        keywords, position_name, _, _ = await _get_user_resume_data(current_user.id, db)
 
         # 提取对话历史
         dialogue_messages = []

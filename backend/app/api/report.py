@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import get_db
 from app.models.models import InterviewSession, EvaluationReport, Resume, User
@@ -21,7 +21,6 @@ INTERVIEW_TYPE_LABELS = {
 
 
 def _extract_keywords_from_resume(resume: Resume | None) -> list[str]:
-    """从简历记录中提取关键词"""
     if resume and resume.parsed_keywords:
         kw_data = resume.parsed_keywords
         if isinstance(kw_data, dict) and "keywords" in kw_data:
@@ -30,7 +29,6 @@ def _extract_keywords_from_resume(resume: Resume | None) -> list[str]:
 
 
 def _format_duration(started_at, ended_at) -> str:
-    """格式化面试时长为可读字符串"""
     if not started_at:
         return "未知"
     end = ended_at or datetime.utcnow()
@@ -51,7 +49,6 @@ async def _generate_and_persist_report(
     keywords: list[str],
     db: AsyncSession,
 ) -> EvaluationReport:
-    """调用 AI 评估引擎生成报告并持久化到数据库"""
     dialogue_messages = []
     if session.dialogue_history and "messages" in session.dialogue_history:
         dialogue_messages = session.dialogue_history["messages"]
@@ -76,14 +73,57 @@ async def _generate_and_persist_report(
     return report
 
 
+@router.get("/history/list")
+async def get_report_history(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(InterviewSession)
+        .where(
+            InterviewSession.user_id == current_user.id,
+            InterviewSession.status == "completed",
+        )
+        .order_by(InterviewSession.started_at.desc())
+    )
+    sessions = result.scalars().all()
+
+    items = []
+    for s in sessions:
+        report_result = await db.execute(
+            select(EvaluationReport).where(EvaluationReport.session_id == s.id)
+        )
+        report = report_result.scalar_one_or_none()
+
+        avg_score = None
+        if report and report.radar_scores:
+            scores = [v for v in report.radar_scores.values() if isinstance(v, (int, float))]
+            if scores:
+                avg_score = round(sum(scores) / len(scores))
+
+        type_label = INTERVIEW_TYPE_LABELS.get(s.interview_type, s.interview_type)
+        duration = _format_duration(s.started_at, s.ended_at)
+
+        items.append({
+            "session_id": s.id,
+            "interview_type": s.interview_type,
+            "type_label": type_label,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            "duration": duration,
+            "average_score": avg_score,
+            "has_report": report is not None,
+        })
+
+    return {"items": items, "total": len(items)}
+
+
 @router.get("/{session_id}", response_model=EvaluationReportResponse)
 async def get_report(
     session_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """获取面试评估报告（若不存在则实时生成），包含面试元数据"""
-    # 查询会话
     result = await db.execute(
         select(InterviewSession).where(
             InterviewSession.id == session_id,
@@ -97,7 +137,6 @@ async def get_report(
     if session.status != "completed":
         raise HTTPException(status_code=400, detail="面试尚未结束，无法生成报告")
 
-    # 先查询是否已有报告
     result = await db.execute(
         select(EvaluationReport).where(
             EvaluationReport.session_id == session_id
@@ -106,7 +145,6 @@ async def get_report(
     report = result.scalar_one_or_none()
 
     if not report:
-        # 获取用户简历关键词
         resume_result = await db.execute(
             select(Resume)
             .where(Resume.user_id == current_user.id)
@@ -116,10 +154,8 @@ async def get_report(
         resume = resume_result.scalar_one_or_none()
         keywords = _extract_keywords_from_resume(resume)
 
-        # 调用 AI 评估引擎生成报告并持久化
         report = await _generate_and_persist_report(session, keywords, db)
 
-    # 构建面试元数据
     interview_type_label = INTERVIEW_TYPE_LABELS.get(
         session.interview_type, session.interview_type
     )
