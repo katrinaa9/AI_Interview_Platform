@@ -1,9 +1,22 @@
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload as UploadIcon, FileText, X, Check, Loader2, ArrowRight, AlertCircle } from "lucide-react";
+import {
+  Upload as UploadIcon,
+  FileText,
+  X,
+  Check,
+  Loader2,
+  ArrowRight,
+  AlertCircle,
+  BriefcaseBusiness,
+  Gauge,
+  Flame,
+  MessagesSquare,
+} from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
+import type { InterviewType } from "@/types";
 
 const MOCK_TECH_TAGS = [
   "React", "Vue", "Angular", "TypeScript", "JavaScript",
@@ -13,10 +26,43 @@ const MOCK_TECH_TAGS = [
   "Python", "Java", "C++", "Rust", "机器学习",
 ];
 
+const INTERVIEW_TYPE_OPTIONS: Array<{
+  value: InterviewType;
+  label: string;
+  description: string;
+  icon: typeof Gauge;
+}> = [
+  {
+    value: "technical",
+    label: "基础技术面",
+    description: "按常规技术面节奏考察基础、项目和工程实践。",
+    icon: Gauge,
+  },
+  {
+    value: "pressure",
+    label: "压力面试",
+    description: "追问边界条件、故障排查和方案短板，强度更高。",
+    icon: Flame,
+  },
+  {
+    value: "friendly",
+    label: "轻松聊天",
+    description: "更像同行交流，围绕项目复盘和职业表达展开。",
+    icon: MessagesSquare,
+  },
+];
+
 export default function Upload() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { setKeywords, token, resetInterview } = useAppStore();
+  const {
+    setKeywords,
+    setJobContext,
+    interviewType,
+    setInterviewType,
+    token,
+    resetInterview,
+  } = useAppStore();
 
   const [file, setFile] = useState<File | null>(null);
   const [isParsing, setIsParsing] = useState(false);
@@ -25,8 +71,13 @@ export default function Upload() {
   const [showFallback, setShowFallback] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [customInput, setCustomInput] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [jobDescription, setJobDescription] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false); // 防重复提交
+
+  const normalizedJobTitle = jobTitle.trim();
+  const normalizedJobDescription = jobDescription.trim();
 
   // ===== 通过 POST /api/resume/upload 上传并解析 =====
   const handleParse = useCallback(async (uploadFile: File) => {
@@ -40,6 +91,12 @@ export default function Upload() {
     try {
       const formData = new FormData();
       formData.append("file", uploadFile);
+      if (normalizedJobTitle) {
+        formData.append("job_title", normalizedJobTitle);
+      }
+      if (normalizedJobDescription) {
+        formData.append("job_description", normalizedJobDescription);
+      }
 
       const headers: Record<string, string> = {};
       if (token) {
@@ -79,7 +136,7 @@ export default function Upload() {
       setIsParsing(false);
       setIsSubmitting(false);
     }
-  }, [token, isSubmitting]);
+  }, [token, isSubmitting, normalizedJobTitle, normalizedJobDescription]);
 
   // 拖拽上传
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -137,29 +194,31 @@ export default function Upload() {
 
     setIsSubmitting(true);
 
-    // 降级模式下，先提交关键词到后端
-    if (showFallback) {
-      try {
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (token) {
-          headers["Authorization"] = `Bearer ${token}`;
-        }
-
-        await fetch("/api/resume/keywords", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ keywords: finalKeywords }),
-        });
-      } catch (err) {
-        console.error("关键词提交失败:", err);
-        // 不阻断流程，前端仍然保存关键词
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
       }
+
+      await fetch(showFallback ? "/api/resume/keywords" : "/api/resume/job-context", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          keywords: finalKeywords,
+          job_title: normalizedJobTitle || null,
+          job_description: normalizedJobDescription || null,
+        }),
+      });
+    } catch (err) {
+      console.error("岗位上下文提交失败:", err);
+      // 不阻断流程，前端仍然保存上下文
     }
 
     resetInterview();
     setKeywords(finalKeywords);
+    setJobContext(normalizedJobTitle, normalizedJobDescription);
     navigate("/interview");
   };
 
@@ -190,6 +249,98 @@ export default function Upload() {
           {errorMsg}
         </div>
       )}
+
+      {/* 岗位要求 */}
+      <section className="mb-6 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 p-5">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+            <BriefcaseBusiness className="h-5 w-5 text-blue-600 dark:text-blue-300" />
+          </div>
+          <div>
+            <h2 className="text-base font-semibold">目标岗位要求</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              粘贴 JD 后，面试会围绕岗位职责、必备技能和加分项追问
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-4">
+          <input
+            type="text"
+            value={jobTitle}
+            onChange={(e) => setJobTitle(e.target.value)}
+            maxLength={120}
+            placeholder="岗位名称，例如：前端开发工程师 / 后端实习生"
+            className="h-10 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-800 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <div className="relative">
+            <textarea
+              value={jobDescription}
+              onChange={(e) => setJobDescription(e.target.value)}
+              maxLength={8000}
+              rows={7}
+              placeholder="粘贴岗位描述、职责、任职要求、加分项..."
+              className="w-full resize-y rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-800 px-3 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="absolute bottom-2 right-3 text-xs text-slate-400">
+              {normalizedJobDescription.length}/8000
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 面试风格 */}
+      <section className="mb-6 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 p-5">
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <div>
+            <h2 className="text-base font-semibold">面试风格</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              选择这次模拟面试的追问强度和沟通方式
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          {INTERVIEW_TYPE_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            const selected = interviewType === option.value;
+
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setInterviewType(option.value)}
+                className={cn(
+                  "min-h-[116px] rounded-lg border p-4 text-left transition-all focus:outline-none focus:ring-2 focus:ring-blue-500",
+                  selected
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
+                    : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-gray-800/70 hover:border-slate-300 dark:hover:border-slate-600"
+                )}
+              >
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div
+                    className={cn(
+                      "h-9 w-9 rounded-lg flex items-center justify-center",
+                      selected
+                        ? "bg-blue-600 text-white"
+                        : "bg-white dark:bg-gray-900 text-slate-500 dark:text-slate-300"
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  {selected && (
+                    <Check className="h-4 w-4 text-blue-600 dark:text-blue-300" />
+                  )}
+                </div>
+                <div className="font-medium text-sm">{option.label}</div>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                  {option.description}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       {/* 拖拽上传区 */}
       {!file && (

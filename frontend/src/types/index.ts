@@ -18,6 +18,8 @@ export interface ChatMessage {
   content: string;
 }
 
+export type InterviewType = "technical" | "pressure" | "friendly";
+
 export interface RadarScores {
   技术深度: number;
   逻辑表达: number;
@@ -31,12 +33,23 @@ export interface RadarScores {
   情绪稳定性?: number;
 }
 
+export interface EvidenceFeedbackItem {
+  结论: string;
+  对话证据: string;
+  改进方向: string;
+}
+
 export interface AIFeedback {
   总体评价?: string;
   核心优势: string;
   薄弱环节: string;
   详细分析?: string;
   改进建议: string;
+  岗位匹配度?: number | string;
+  JD匹配亮点?: string;
+  JD差距分析?: string;
+  岗位补强建议?: string;
+  证据化反馈?: EvidenceFeedbackItem[] | string;
 }
 
 export interface EvaluationReport {

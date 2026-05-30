@@ -1,18 +1,106 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Send, Mic, Loader2, ArrowLeft, StopCircle,
   WifiOff, RefreshCw, X, AlertTriangle,
+  BriefcaseBusiness, ClipboardList, CheckCircle2,
+  CircleDashed, Gauge,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/Button";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
-import type { ChatMessage } from "@/types";
+import type { ChatMessage, InterviewType } from "@/types";
 
 // ===== SSE 重连配置 =====
 const MAX_RETRIES = 3;
 const BASE_RETRY_DELAY = 1000; // ms，指数退避基数
+const MAX_INTERVIEW_TURNS = 15;
+
+const INTERVIEW_TYPE_LABELS: Record<InterviewType, string> = {
+  technical: "基础技术面",
+  pressure: "压力面试",
+  friendly: "轻松聊天",
+};
+
+const JD_TOPIC_RULES = [
+  { label: "项目架构", patterns: ["架构", "系统设计", "模块", "微服务", "分布式"] },
+  { label: "性能优化", patterns: ["性能", "优化", "高并发", "响应时间", "吞吐"] },
+  { label: "数据库", patterns: ["mysql", "postgresql", "数据库", "sql", "索引"] },
+  { label: "缓存", patterns: ["redis", "缓存", "cache"] },
+  { label: "部署运维", patterns: ["docker", "kubernetes", "k8s", "部署", "devops", "ci/cd"] },
+  { label: "故障排查", patterns: ["排查", "故障", "监控", "日志", "告警"] },
+  { label: "测试质量", patterns: ["测试", "单元测试", "质量", "review", "代码规范"] },
+  { label: "团队协作", patterns: ["协作", "沟通", "团队", "跨部门", "需求"] },
+];
+
+const TOPIC_ALIASES: Record<string, string[]> = {
+  项目架构: ["项目", "架构", "系统设计", "模块"],
+  性能优化: ["性能", "优化", "高并发", "响应时间"],
+  故障排查: ["故障", "排查", "日志", "监控", "异常"],
+  沟通协作: ["沟通", "协作", "团队", "分歧"],
+  部署运维: ["部署", "docker", "kubernetes", "k8s", "ci/cd"],
+  测试质量: ["测试", "质量", "review", "代码规范"],
+};
+
+const ABILITY_BY_TURN = [
+  { maxTurn: 1, ability: "逻辑表达", focus: "自我介绍与背景梳理" },
+  { maxTurn: 3, ability: "专业知识广度", focus: "技术基础与概念准确性" },
+  { maxTurn: 5, ability: "技术深度", focus: "原理机制与技术取舍" },
+  { maxTurn: 8, ability: "项目实践能力", focus: "项目架构、落地和效果" },
+  { maxTurn: 11, ability: "应变与解决问题能力", focus: "压力追问、边界条件和排障" },
+  { maxTurn: 13, ability: "沟通与协作素养", focus: "团队协作与职业素养" },
+  { maxTurn: 15, ability: "岗位匹配度", focus: "目标岗位动机与补强方向" },
+];
+
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function normalizeText(value: string) {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
+function topicCovered(topic: string, normalizedDialogue: string) {
+  const aliases = [topic, ...(TOPIC_ALIASES[topic] || [])];
+  return aliases.some((alias) => normalizedDialogue.includes(normalizeText(alias)));
+}
+
+function buildInterviewTopics(keywords: string[], jobDescription: string, jobTitle: string) {
+  const baseTopics = keywords.slice(0, 8);
+  const jdText = normalizeText(`${jobTitle} ${jobDescription}`);
+  const jdTopics = JD_TOPIC_RULES
+    .filter((rule) => rule.patterns.some((pattern) => jdText.includes(normalizeText(pattern))))
+    .map((rule) => rule.label);
+
+  return unique([
+    ...baseTopics,
+    ...jdTopics,
+    "项目架构",
+    "性能优化",
+    "故障排查",
+    "沟通协作",
+  ]).slice(0, 12);
+}
+
+function inferCurrentAbility(userTurnCount: number, lastAssistantContent: string) {
+  const text = normalizeText(lastAssistantContent);
+
+  if (/项目|架构|上线|部署|性能|优化|选型/.test(text)) {
+    return { ability: "项目实践能力", focus: "项目落地、架构取舍和量化结果" };
+  }
+  if (/原理|底层|机制|源码|深入|为什么/.test(text)) {
+    return { ability: "技术深度", focus: "原理机制、边界条件和技术取舍" };
+  }
+  if (/故障|排查|生产|压力|质疑|凌晨|异常|边界/.test(text)) {
+    return { ability: "应变与解决问题能力", focus: "异常场景、排障路径和抗压表现" };
+  }
+  if (/团队|协作|沟通|分歧|同事|规划|加班/.test(text)) {
+    return { ability: "沟通与协作素养", focus: "表达、协作和职业判断" };
+  }
+
+  return ABILITY_BY_TURN.find((item) => userTurnCount <= item.maxTurn) || ABILITY_BY_TURN[ABILITY_BY_TURN.length - 1];
+}
 
 // ===== fetch + ReadableStream SSE 解析器 =====
 interface SSEEvent {
@@ -69,6 +157,15 @@ interface Toast {
   action?: { label: string; onClick: () => void };
 }
 
+interface InterviewProgress {
+  userTurnCount: number;
+  percent: number;
+  currentAbility: string;
+  currentFocus: string;
+  coveredTopics: string[];
+  pendingTopics: string[];
+}
+
 let toastIdCounter = 0;
 
 export default function Interview() {
@@ -81,6 +178,9 @@ export default function Interview() {
 
   const {
     keywords,
+    jobTitle,
+    jobDescription,
+    interviewType,
     token,
     sessionId,
     setSessionId,
@@ -96,6 +196,29 @@ export default function Interview() {
   const [streamingContent, setStreamingContent] = useState("");
   const [statusText, setStatusText] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const interviewProgress = useMemo<InterviewProgress>(() => {
+    const userTurnCount = messages.filter((msg) => msg.role === "user").length;
+    const lastAssistantMessage = [...messages]
+      .reverse()
+      .find((msg) => msg.role === "assistant")?.content || "";
+    const topics = buildInterviewTopics(keywords, jobDescription, jobTitle);
+    const dialogueAfterOpening = normalizeText(
+      messages.slice(1).map((msg) => msg.content).join(" ")
+    );
+    const coveredTopics = topics.filter((topic) => topicCovered(topic, dialogueAfterOpening));
+    const pendingTopics = topics.filter((topic) => !coveredTopics.includes(topic));
+    const current = inferCurrentAbility(userTurnCount, streamingContent || lastAssistantMessage);
+
+    return {
+      userTurnCount,
+      percent: Math.min(100, Math.round((userTurnCount / MAX_INTERVIEW_TURNS) * 100)),
+      currentAbility: current.ability,
+      currentFocus: current.focus,
+      coveredTopics: coveredTopics.slice(0, 8),
+      pendingTopics: pendingTopics.slice(0, 8),
+    };
+  }, [jobDescription, jobTitle, keywords, messages, streamingContent]);
 
   // ===== Toast 管理 =====
   const addToast = useCallback(
@@ -141,7 +264,7 @@ export default function Interview() {
         const res = await fetch("/api/interview/start", {
           method: "POST",
           headers: authHeaders(),
-          body: JSON.stringify({ interview_type: "technical" }),
+          body: JSON.stringify({ interview_type: interviewType }),
         });
 
         if (!res.ok) {
@@ -177,7 +300,7 @@ export default function Interview() {
         abortRef.current = null;
       }
     };
-  }, []);
+  }, [addMessage, addToast, authHeaders, clearMessages, interviewType, keywords.length, navigate, setSessionId]);
 
   // ===== 自动滚动到底部 =====
   useEffect(() => {
@@ -415,7 +538,7 @@ export default function Interview() {
 
       {/* 顶部信息栏 */}
       <div className="shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-gray-950/90 backdrop-blur-sm px-4 py-3">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => {
@@ -437,6 +560,12 @@ export default function Interview() {
                 )}
               </h2>
               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                {(jobTitle || jobDescription) && (
+                  <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+                    <BriefcaseBusiness className="h-3 w-3" />
+                    {jobTitle || "已匹配岗位要求"}
+                  </span>
+                )}
                 {keywords.map((kw) => (
                   <span
                     key={kw}
@@ -445,6 +574,9 @@ export default function Interview() {
                     {kw}
                   </span>
                 ))}
+                <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300">
+                  {INTERVIEW_TYPE_LABELS[interviewType]}
+                </span>
               </div>
             </div>
           </div>
@@ -466,88 +598,197 @@ export default function Interview() {
         </div>
       </div>
 
-      {/* 聊天区域 */}
-      <div
-        ref={chatContainerRef}
-        className="flex-1 overflow-y-auto px-4 py-6 scrollbar-thin"
-      >
-        <div className="max-w-4xl mx-auto space-y-4">
-          {messages.length <= 1 && (
-            <div className="text-center py-8 text-slate-400 dark:text-slate-600 text-sm">
-              <p>面试官已就位，请开始你的自我介绍</p>
+      <div className="min-h-0 flex-1 overflow-hidden px-4">
+        <div className="max-w-7xl mx-auto grid h-full gap-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+          {/* 聊天区域 */}
+          <div
+            ref={chatContainerRef}
+            className="min-h-0 overflow-y-auto py-6 lg:pr-5 scrollbar-thin"
+          >
+            <div className="mx-auto w-full max-w-5xl space-y-4">
+              <div className="lg:hidden">
+                <InterviewProgressPanel progress={interviewProgress} compact />
+              </div>
+
+              {messages.length <= 1 && (
+                <div className="text-center py-8 text-slate-400 dark:text-slate-600 text-sm">
+                  <p>面试官已就位，请开始你的自我介绍</p>
+                </div>
+              )}
+
+              {messages.map((msg, i) => (
+                <ChatBubble key={i} message={msg} />
+              ))}
+
+              {isStreaming && streamingContent && (
+                <ChatBubble
+                  message={{ role: "assistant", content: streamingContent }}
+                  isStreaming
+                />
+              )}
             </div>
-          )}
+          </div>
 
-          {messages.map((msg, i) => (
-            <ChatBubble key={i} message={msg} />
-          ))}
-
-          {isStreaming && streamingContent && (
-            <ChatBubble
-              message={{ role: "assistant", content: streamingContent }}
-              isStreaming
-            />
-          )}
+          <aside className="hidden min-h-0 border-l border-slate-200 dark:border-slate-800 py-6 lg:flex lg:justify-center">
+            <div className="sticky top-6 w-full max-w-[270px]">
+              <InterviewProgressPanel progress={interviewProgress} />
+            </div>
+          </aside>
         </div>
       </div>
 
       {/* 底部输入栏 */}
       <div className="shrink-0 border-t border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-gray-950/90 backdrop-blur-sm px-4 py-4">
-        <div className="max-w-4xl mx-auto">
-          {statusText && isStreaming && (
-            <div className="mb-2 flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 animate-fade-in">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {statusText}
-            </div>
-          )}
+        <div className="max-w-7xl mx-auto grid gap-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="mx-auto w-full max-w-5xl lg:pr-5">
+            {statusText && isStreaming && (
+              <div className="mb-2 flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 animate-fade-in">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {statusText}
+              </div>
+            )}
 
-          <div className="flex items-end gap-2">
-            <div className="flex-1 relative">
-              <textarea
-                ref={inputRef}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  isStreaming
-                    ? "AI 正在回复中..."
-                    : !sessionId
-                    ? "正在连接面试官..."
-                    : "输入你的回答... (Enter 发送, Shift+Enter 换行)"
-                }
+            <div className="flex items-end gap-2">
+              <div className="flex-1 relative">
+                <textarea
+                  ref={inputRef}
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
+                    isStreaming
+                      ? "AI 正在回复中..."
+                      : !sessionId
+                      ? "正在连接面试官..."
+                      : "输入你的回答... (Enter 发送, Shift+Enter 换行)"
+                  }
+                  disabled={isStreaming || !sessionId}
+                  rows={2}
+                  className={cn(
+                    "w-full resize-none rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 px-4 py-3 pr-12 text-sm",
+                    "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent",
+                    "placeholder:text-slate-400 dark:placeholder:text-slate-600",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                />
+              </div>
+
+              <Button
+                variant="ghost"
+                size="icon"
                 disabled={isStreaming || !sessionId}
-                rows={2}
-                className={cn(
-                  "w-full resize-none rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 px-4 py-3 pr-12 text-sm",
-                  "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent",
-                  "placeholder:text-slate-400 dark:placeholder:text-slate-600",
-                  "disabled:opacity-50 disabled:cursor-not-allowed"
+                className="shrink-0"
+                title="语音输入（即将上线）"
+              >
+                <Mic className="h-5 w-5" />
+              </Button>
+
+              <Button
+                onClick={handleSend}
+                disabled={!inputValue.trim() || isStreaming || !sessionId}
+                size="icon"
+                className="shrink-0"
+              >
+                {isStreaming ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Send className="h-5 w-5" />
                 )}
-              />
+              </Button>
             </div>
+          </div>
+          <div className="hidden lg:block" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
-            <Button
-              variant="ghost"
-              size="icon"
-              disabled={isStreaming || !sessionId}
-              className="shrink-0"
-              title="语音输入（即将上线）"
-            >
-              <Mic className="h-5 w-5" />
-            </Button>
+function InterviewProgressPanel({
+  progress,
+  compact = false,
+}: {
+  progress: InterviewProgress;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm",
+        compact ? "p-4" : "p-4"
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <ClipboardList className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            考察进度
+          </div>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            第 {progress.userTurnCount} / {MAX_INTERVIEW_TURNS} 轮
+          </p>
+        </div>
+        <span className="rounded-full bg-blue-100 dark:bg-blue-900/40 px-2 py-1 text-xs font-semibold text-blue-700 dark:text-blue-300">
+          {progress.percent}%
+        </span>
+      </div>
 
-            <Button
-              onClick={handleSend}
-              disabled={!inputValue.trim() || isStreaming || !sessionId}
-              size="icon"
-              className="shrink-0"
-            >
-              {isStreaming ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <Send className="h-5 w-5" />
-              )}
-            </Button>
+      <div className="mt-3 h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-blue-600 transition-all duration-500"
+          style={{ width: `${progress.percent}%` }}
+        />
+      </div>
+
+      <div className="mt-4 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/20 px-3 py-3">
+        <div className="flex items-center gap-2 text-xs text-blue-700 dark:text-blue-300">
+          <Gauge className="h-3.5 w-3.5" />
+          当前能力
+        </div>
+        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">
+          {progress.currentAbility}
+        </div>
+        <div className="mt-0.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+          {progress.currentFocus}
+        </div>
+      </div>
+
+      <div className={cn("mt-4 grid gap-3", compact && "sm:grid-cols-2")}>
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            已考察
+          </div>
+          <div className="flex flex-wrap gap-1.5 min-h-7">
+            {progress.coveredTopics.length > 0 ? (
+              progress.coveredTopics.map((topic) => (
+                <span
+                  key={topic}
+                  className="rounded bg-emerald-100 dark:bg-emerald-900/40 px-2 py-1 text-xs text-emerald-700 dark:text-emerald-300"
+                >
+                  {topic}
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-slate-400 dark:text-slate-500">等待候选人开始回答</span>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-slate-600 dark:text-slate-300">
+            <CircleDashed className="h-3.5 w-3.5" />
+            待考察
+          </div>
+          <div className="flex flex-wrap gap-1.5 min-h-7">
+            {progress.pendingTopics.map((topic) => (
+              <span
+                key={topic}
+                className="rounded bg-slate-200 dark:bg-slate-800 px-2 py-1 text-xs text-slate-600 dark:text-slate-300"
+              >
+                {topic}
+              </span>
+            ))}
           </div>
         </div>
       </div>

@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import get_db
 from app.models.models import InterviewSession, EvaluationReport, Resume, User
@@ -28,6 +28,15 @@ def _extract_keywords_from_resume(resume: Resume | None) -> list[str]:
     return []
 
 
+def _extract_job_context_from_resume(resume: Resume | None) -> tuple[str | None, str | None]:
+    if resume and resume.parsed_keywords and isinstance(resume.parsed_keywords, dict):
+        return (
+            resume.parsed_keywords.get("job_title"),
+            resume.parsed_keywords.get("job_description"),
+        )
+    return None, None
+
+
 def _format_duration(started_at, ended_at) -> str:
     if not started_at:
         return "未知"
@@ -48,13 +57,15 @@ async def _generate_and_persist_report(
     session: InterviewSession,
     keywords: list[str],
     db: AsyncSession,
+    job_title: str | None = None,
+    job_description: str | None = None,
 ) -> EvaluationReport:
     dialogue_messages = []
     if session.dialogue_history and "messages" in session.dialogue_history:
         dialogue_messages = session.dialogue_history["messages"]
 
     radar_scores, ai_feedback = await evaluate_interview(
-        dialogue_messages, keywords
+        dialogue_messages, keywords, job_title, job_description
     )
 
     report = EvaluationReport(
@@ -68,7 +79,7 @@ async def _generate_and_persist_report(
 
     logger.info(
         f"AI 评估报告已生成 | report_id={report.id} | session={session.id} "
-        f"| scores={list(radar_scores.values())}"
+        f"| scores={list(radar_scores.values())} | job_title={job_title or '未提供'}"
     )
     return report
 
@@ -118,6 +129,37 @@ async def get_report_history(
     return {"items": items, "total": len(items)}
 
 
+@router.delete("/{session_id}")
+async def delete_report_history(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(InterviewSession).where(
+            InterviewSession.id == session_id,
+            InterviewSession.user_id == current_user.id,
+        )
+    )
+    session = result.scalar_one_or_none()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="历史面试不存在")
+    if session.status != "completed":
+        raise HTTPException(status_code=400, detail="只能删除已完成的历史面试")
+
+    await db.execute(
+        delete(EvaluationReport).where(EvaluationReport.session_id == session_id)
+    )
+    await db.delete(session)
+    await db.commit()
+
+    logger.info(
+        f"用户删除历史面试 | session={session_id} | user={current_user.id}"
+    )
+    return {"message": "历史面试已删除", "session_id": session_id}
+
+
 @router.get("/{session_id}", response_model=EvaluationReportResponse)
 async def get_report(
     session_id: str,
@@ -153,8 +195,11 @@ async def get_report(
         )
         resume = resume_result.scalar_one_or_none()
         keywords = _extract_keywords_from_resume(resume)
+        job_title, job_description = _extract_job_context_from_resume(resume)
 
-        report = await _generate_and_persist_report(session, keywords, db)
+        report = await _generate_and_persist_report(
+            session, keywords, db, job_title, job_description
+        )
 
     interview_type_label = INTERVIEW_TYPE_LABELS.get(
         session.interview_type, session.interview_type

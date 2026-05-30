@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { User, InterviewSession, ChatMessage } from "@/types";
+import type { User, InterviewSession, ChatMessage, InterviewType } from "@/types";
 
 interface AppState {
   // 主题
@@ -15,6 +15,15 @@ interface AppState {
   // 简历关键词
   keywords: string[];
   setKeywords: (keywords: string[]) => void;
+
+  // 岗位要求
+  jobTitle: string;
+  jobDescription: string;
+  setJobContext: (jobTitle: string, jobDescription: string) => void;
+
+  // 面试风格
+  interviewType: InterviewType;
+  setInterviewType: (interviewType: InterviewType) => void;
 
   // 面试会话 ID（从后端 /api/interview/start 获取）
   sessionId: string | null;
@@ -51,6 +60,9 @@ export const useAppStore = create<AppState>((set) => ({
       user,
       token,
       keywords: [],
+      jobTitle: "",
+      jobDescription: "",
+      interviewType: "technical",
       sessionId: null,
       session: null,
       messages: [],
@@ -61,6 +73,9 @@ export const useAppStore = create<AppState>((set) => ({
       user: null,
       token: null,
       keywords: [],
+      jobTitle: "",
+      jobDescription: "",
+      interviewType: "technical",
       sessionId: null,
       session: null,
       messages: [],
@@ -69,6 +84,13 @@ export const useAppStore = create<AppState>((set) => ({
 
   keywords: [],
   setKeywords: (keywords) => set({ keywords }),
+
+  jobTitle: "",
+  jobDescription: "",
+  setJobContext: (jobTitle, jobDescription) => set({ jobTitle, jobDescription }),
+
+  interviewType: "technical",
+  setInterviewType: (interviewType) => set({ interviewType }),
 
   sessionId: null,
   setSessionId: (sessionId) => set({ sessionId }),

@@ -1,7 +1,8 @@
 import uuid
 import asyncio
 import logging
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import get_db
 from app.models.models import Resume, User
@@ -14,9 +15,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/resume", tags=["简历解析"])
 
 
+def _normalize_optional_text(value: str | None, max_length: int) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        return None
+    return normalized[:max_length]
+
+
 @router.post("/upload", response_model=ResumeUploadResponse)
 async def upload_resume(
     file: UploadFile = File(...),
+    job_title: str | None = Form(default=None),
+    job_description: str | None = Form(default=None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -50,6 +62,8 @@ async def upload_resume(
     candidate_name: str | None = None
     freq_data: dict = {}
     parse_success = False
+    normalized_job_title = _normalize_optional_text(job_title, 120)
+    normalized_job_description = _normalize_optional_text(job_description, 8000)
 
     try:
         raw_text, extracted_keywords, freq_data, position_name, candidate_name = (
@@ -93,6 +107,8 @@ async def upload_resume(
             "frequencies": freq_data,
             "position": position_name,
             "candidate_name": candidate_name,
+            "job_title": normalized_job_title,
+            "job_description": normalized_job_description,
         },
         raw_text=raw_text,
     )
@@ -114,6 +130,8 @@ async def upload_resume(
         id=resume.id,
         parsed_keywords=extracted_keywords,
         message=message,
+        job_title=normalized_job_title,
+        job_description=normalized_job_description,
     )
 
 
@@ -130,10 +148,17 @@ async def submit_keywords(
     if not body.keywords:
         raise HTTPException(status_code=400, detail="关键词列表不能为空")
 
+    normalized_job_title = _normalize_optional_text(body.job_title, 120)
+    normalized_job_description = _normalize_optional_text(body.job_description, 8000)
+
     resume = Resume(
         id=str(uuid.uuid4()),
         user_id=current_user.id,
-        parsed_keywords={"keywords": body.keywords},
+        parsed_keywords={
+            "keywords": body.keywords,
+            "job_title": normalized_job_title,
+            "job_description": normalized_job_description,
+        },
     )
     db.add(resume)
     await db.flush()
@@ -143,4 +168,65 @@ async def submit_keywords(
         id=resume.id,
         parsed_keywords=body.keywords,
         message="关键词提交成功",
+        job_title=normalized_job_title,
+        job_description=normalized_job_description,
+    )
+
+
+@router.post("/job-context", response_model=ResumeUploadResponse)
+async def update_job_context(
+    body: ResumeKeywordsRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新最新简历的目标岗位要求。
+
+    用户可能在简历解析后继续调整岗位 JD；开始面试前同步一次，确保后端 prompt 使用最新岗位要求。
+    """
+    if not body.keywords:
+        raise HTTPException(status_code=400, detail="关键词列表不能为空")
+
+    normalized_job_title = _normalize_optional_text(body.job_title, 120)
+    normalized_job_description = _normalize_optional_text(body.job_description, 8000)
+
+    result = await db.execute(
+        select(Resume)
+        .where(Resume.user_id == current_user.id)
+        .order_by(Resume.created_at.desc())
+        .limit(1)
+    )
+    resume = result.scalar_one_or_none()
+
+    if resume:
+        metadata = dict(resume.parsed_keywords) if isinstance(resume.parsed_keywords, dict) else {}
+        metadata["keywords"] = body.keywords
+        metadata["job_title"] = normalized_job_title
+        metadata["job_description"] = normalized_job_description
+        resume.parsed_keywords = metadata
+        await db.flush()
+        await db.refresh(resume)
+        resume_id = resume.id
+        message = "岗位要求已更新"
+    else:
+        resume = Resume(
+            id=str(uuid.uuid4()),
+            user_id=current_user.id,
+            parsed_keywords={
+                "keywords": body.keywords,
+                "job_title": normalized_job_title,
+                "job_description": normalized_job_description,
+            },
+        )
+        db.add(resume)
+        await db.flush()
+        await db.refresh(resume)
+        resume_id = resume.id
+        message = "岗位要求已保存"
+
+    return ResumeUploadResponse(
+        id=resume_id,
+        parsed_keywords=body.keywords,
+        message=message,
+        job_title=normalized_job_title,
+        job_description=normalized_job_description,
     )

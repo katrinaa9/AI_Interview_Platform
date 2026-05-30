@@ -32,10 +32,14 @@ class ResumeUploadResponse(BaseModel):
     id: str
     parsed_keywords: List[str]
     message: str
+    job_title: Optional[str] = None
+    job_description: Optional[str] = None
 
 
 class ResumeKeywordsRequest(BaseModel):
     keywords: List[str]
+    job_title: Optional[str] = Field(default=None, max_length=120)
+    job_description: Optional[str] = Field(default=None, max_length=8000)
 
 
 # ===== 题库相关 =====
@@ -137,7 +141,7 @@ class EvaluationReportResponse(BaseModel):
     id: str
     session_id: str
     radar_scores: Dict[str, int]
-    ai_feedback: Dict[str, str]
+    ai_feedback: Dict[str, Any]
     created_at: datetime
     interview_date: Optional[datetime] = None
     interview_duration: Optional[str] = None
