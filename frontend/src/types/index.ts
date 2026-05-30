@@ -2,6 +2,7 @@ export interface User {
   id: string;
   username: string;
   role: "student" | "admin";
+  is_active?: boolean;
   created_at: string;
 }
 

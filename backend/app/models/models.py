@@ -16,6 +16,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(
         Enum("student", "admin", name="user_role"), nullable=False, default="student"
     )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow

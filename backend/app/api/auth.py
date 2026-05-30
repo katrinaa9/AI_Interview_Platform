@@ -50,6 +50,7 @@ async def register(body: UserRegister, db: AsyncSession = Depends(get_db)):
                 id=user.id,
                 username=user.username,
                 role=user.role,
+                is_active=user.is_active,
                 created_at=user.created_at,
             ),
         )
@@ -77,6 +78,13 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
                 detail="用户名或密码错误",
             )
 
+        if not user.is_active:
+            logger.warning(f"登录失败: 用户已禁用 | username={body.username}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="账号已被禁用，请联系管理员",
+            )
+
         if not verify_password(body.password, user.password_hash):
             logger.warning(f"登录失败: 密码错误 | username={body.username}")
             raise HTTPException(
@@ -93,6 +101,7 @@ async def login(body: UserLogin, db: AsyncSession = Depends(get_db)):
                 id=user.id,
                 username=user.username,
                 role=user.role,
+                is_active=user.is_active,
                 created_at=user.created_at,
             ),
         )
@@ -130,6 +139,11 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户不存在",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="账号已被禁用，请联系管理员",
         )
     return user
 

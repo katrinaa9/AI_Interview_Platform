@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Brain, Loader2, AlertCircle, LogIn, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useAppStore } from "@/store";
@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { setAuth } = useAppStore();
 
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -62,8 +63,8 @@ export default function Login() {
       // 存储认证信息到全局状态
       setAuth(data.user, data.access_token);
 
-      // 跳转到上传页
-      navigate("/upload");
+      const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
+      navigate(from && from !== "/login" ? from : "/upload", { replace: true });
     } catch (err: any) {
       setError(err.message || "网络异常，请稍后重试");
     } finally {

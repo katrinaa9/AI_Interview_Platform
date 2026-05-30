@@ -18,7 +18,36 @@ class UserResponse(BaseModel):
     id: str
     username: str
     role: str
+    is_active: bool = True
     created_at: datetime
+
+
+class AdminUserRoleUpdate(BaseModel):
+    role: str = Field(..., pattern="^(student|admin)$")
+
+
+class AdminUserStatusUpdate(BaseModel):
+    is_active: bool
+
+
+class AdminUserItem(BaseModel):
+    id: str
+    username: str
+    role: str
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    interview_count: int = 0
+    completed_interview_count: int = 0
+    average_score: Optional[int] = None
+    last_interview_at: Optional[datetime] = None
+
+
+class AdminUserListResponse(BaseModel):
+    items: List[AdminUserItem]
+    total: int
+    page: int
+    page_size: int
 
 
 class TokenResponse(BaseModel):
@@ -146,6 +175,40 @@ class EvaluationReportResponse(BaseModel):
     interview_date: Optional[datetime] = None
     interview_duration: Optional[str] = None
     interview_type: Optional[str] = None
+
+
+class AdminInterviewItem(BaseModel):
+    session_id: str
+    user_id: str
+    username: str
+    status: str
+    interview_type: str
+    type_label: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration: str
+    average_score: Optional[int] = None
+    has_report: bool = False
+    message_count: int = 0
+
+
+class AdminInterviewListResponse(BaseModel):
+    items: List[AdminInterviewItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class AdminInterviewReportResponse(BaseModel):
+    session: AdminInterviewItem
+    radar_scores: Optional[Dict[str, Any]] = None
+    ai_feedback: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
+
+
+class AdminInterviewDeleteResponse(BaseModel):
+    message: str
+    session_id: str
 
 
 # ===== 知识库文档 =====
@@ -277,5 +340,11 @@ class DashboardStatsResponse(BaseModel):
     today_sessions: int
     week_sessions: int
     month_sessions: int
+    total_sessions: int = 0
+    completed_sessions: int = 0
+    average_score: Optional[int] = None
+    interview_type_distribution: List[Dict[str, Any]] = []
+    weak_dimensions: List[Dict[str, Any]] = []
+    failed_logs_count: int = 0
     total_users: int
     recent_logs: List[AuditLogResponse]

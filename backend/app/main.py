@@ -16,6 +16,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _run_lightweight_migrations(connection):
+    """补齐开发环境中 create_all 不会自动新增的简单字段。"""
+    from sqlalchemy import inspect
+
+    inspector = inspect(connection)
+    user_columns = {col["name"] for col in inspector.get_columns("users")}
+    if "is_active" not in user_columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+        logger.info("数据库迁移完成: users.is_active")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -62,6 +75,7 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(_run_lightweight_migrations)
         logger.info("数据库表检查/创建完成")
     except Exception as e:
         logger.error(f"数据库表创建失败（应用可能无法正常使用）: {e}")

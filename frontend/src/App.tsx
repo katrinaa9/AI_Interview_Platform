@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Outlet, Routes, Route, useLocation } from "react-router-dom";
 import { Navbar } from "@/components/layout/Navbar";
 import Home from "@/pages/Home";
 import Upload from "@/pages/Upload";
@@ -8,6 +8,17 @@ import Report from "@/pages/Report";
 import Admin from "@/pages/Admin";
 import Login from "@/pages/Login";
 import { useAppStore } from "@/store";
+
+function RequireAuth() {
+  const location = useLocation();
+  const { token, user } = useAppStore();
+
+  if (!token || !user) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  return <Outlet />;
+}
 
 export default function App() {
   const { theme } = useAppStore();
@@ -28,13 +39,15 @@ export default function App() {
         <Navbar />
         <main>
           <Routes>
-            <Route path="/" element={<Home />} />
             <Route path="/login" element={<Login />} />
-            <Route path="/upload" element={<Upload />} />
-            <Route path="/interview" element={<Interview />} />
-            <Route path="/report" element={<Report />} />
-            <Route path="/admin" element={<Admin />} />
-            <Route path="*" element={<Home />} />
+            <Route element={<RequireAuth />}>
+              <Route path="/" element={<Home />} />
+              <Route path="/upload" element={<Upload />} />
+              <Route path="/interview" element={<Interview />} />
+              <Route path="/report" element={<Report />} />
+              <Route path="/admin" element={<Admin />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>

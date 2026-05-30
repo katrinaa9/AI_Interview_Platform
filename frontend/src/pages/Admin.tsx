@@ -6,13 +6,14 @@ import {
   BookOpen, RefreshCw, Save, LayoutDashboard,
   FileText, Upload, Brain, ScrollText, Clock, Users,
   Database, Eye, RotateCcw, Copy, Check, UploadCloud,
-  File, Activity,
+  File, Activity, UserCog, UserCheck, UserX, BadgeCheck,
+  MessageSquare, ShieldCheck, Ban, Award, Target, PieChart,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
 
-type TabKey = "dashboard" | "questions" | "documents" | "prompt" | "logs";
+type TabKey = "dashboard" | "users" | "interviews" | "questions" | "documents" | "prompt" | "logs";
 
 interface QuestionItem {
   id: string;
@@ -81,6 +82,41 @@ interface AuditLogItem {
   created_at: string;
 }
 
+interface AdminUserItem {
+  id: string;
+  username: string;
+  role: "student" | "admin";
+  is_active: boolean;
+  created_at: string;
+  updated_at?: string;
+  interview_count: number;
+  completed_interview_count: number;
+  average_score: number | null;
+  last_interview_at: string | null;
+}
+
+interface AdminInterviewItem {
+  session_id: string;
+  user_id: string;
+  username: string;
+  status: string;
+  interview_type: string;
+  type_label: string;
+  started_at: string | null;
+  ended_at: string | null;
+  duration: string;
+  average_score: number | null;
+  has_report: boolean;
+  message_count: number;
+}
+
+interface AdminInterviewReport {
+  session: AdminInterviewItem;
+  radar_scores?: Record<string, number>;
+  ai_feedback?: Record<string, any>;
+  created_at?: string;
+}
+
 interface DashboardStats {
   total_questions: number;
   total_documents: number;
@@ -88,6 +124,12 @@ interface DashboardStats {
   today_sessions: number;
   week_sessions: number;
   month_sessions: number;
+  total_sessions: number;
+  completed_sessions: number;
+  average_score: number | null;
+  interview_type_distribution: { type: string; label: string; count: number }[];
+  weak_dimensions: { dimension: string; average_score: number; sample_count: number }[];
+  failed_logs_count: number;
   total_users: number;
   recent_logs: AuditLogItem[];
 }
@@ -110,7 +152,8 @@ const STATUS_COLORS: Record<string, string> = {
 const ACTION_LABELS: Record<string, string> = {
   upload: "上传", batch_upload: "批量上传", delete: "删除", batch_delete: "批量删除",
   reprocess: "重新处理", create: "创建", update: "更新", save: "保存",
-  rollback: "回滚", apply_template: "应用模板",
+  rollback: "回滚", apply_template: "应用模板", role_update: "角色调整",
+  status_update: "账号状态", delete_interview: "删除面试",
 };
 
 function formatSize(bytes: number): string {
@@ -191,6 +234,8 @@ export default function Admin() {
       <div className="flex gap-1 mb-6 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 overflow-x-auto">
         {([
           { key: "dashboard", label: "仪表盘", icon: LayoutDashboard },
+          { key: "users", label: "用户管理", icon: UserCog },
+          { key: "interviews", label: "面试记录", icon: MessageSquare },
           { key: "questions", label: "题库管理", icon: BookOpen },
           { key: "documents", label: "知识库文档", icon: FileText },
           { key: "prompt", label: "提示词配置", icon: Brain },
@@ -213,6 +258,8 @@ export default function Admin() {
       </div>
 
       {activeTab === "dashboard" && <DashboardTab authHeaders={authHeaders} />}
+      {activeTab === "users" && <UsersTab authHeaders={authHeaders} setToast={setToast} />}
+      {activeTab === "interviews" && <InterviewsTab authHeaders={authHeaders} setToast={setToast} />}
       {activeTab === "questions" && <QuestionsTab authHeaders={authHeaders} setToast={setToast} />}
       {activeTab === "documents" && <DocumentsTab authHeaders={authHeaders} authHeadersNoCT={authHeadersNoCT} setToast={setToast} />}
       {activeTab === "prompt" && <PromptTab authHeaders={authHeaders} setToast={setToast} />}
@@ -254,7 +301,7 @@ function DashboardTab({ authHeaders }: { authHeaders: () => Record<string, strin
     { label: "知识片段", value: stats.total_chunks, icon: Database, color: "purple" },
     { label: "注册用户", value: stats.total_users, icon: Users, color: "indigo" },
     { label: "今日面试", value: stats.today_sessions, icon: Activity, color: "amber" },
-    { label: "本周面试", value: stats.week_sessions, icon: BarChart3, color: "rose" },
+    { label: "平均评分", value: stats.average_score ?? "--", icon: Award, color: "rose" },
   ];
 
   const colorMap: Record<string, string> = {
@@ -289,6 +336,80 @@ function DashboardTab({ authHeaders }: { authHeaders: () => Record<string, strin
             <div className="text-xs text-slate-500 mt-1">{label}</div>
           </div>
         ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 bg-white dark:bg-gray-900">
+          <div className="flex items-center gap-2 mb-3">
+            <BarChart3 className="h-4 w-4 text-blue-600" />
+            <h3 className="text-sm font-semibold">面试概览</h3>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <div className="text-xl font-bold">{stats.total_sessions}</div>
+              <div className="text-xs text-slate-500">总面试</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold">{stats.completed_sessions}</div>
+              <div className="text-xs text-slate-500">已完成</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold">{stats.month_sessions}</div>
+              <div className="text-xs text-slate-500">本月</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 bg-white dark:bg-gray-900">
+          <div className="flex items-center gap-2 mb-3">
+            <PieChart className="h-4 w-4 text-emerald-600" />
+            <h3 className="text-sm font-semibold">面试类型占比</h3>
+          </div>
+          {stats.interview_type_distribution.length === 0 ? (
+            <div className="py-3 text-sm text-slate-400">暂无面试数据</div>
+          ) : (
+            <div className="space-y-2">
+              {stats.interview_type_distribution.map((item) => {
+                const percent = stats.total_sessions ? Math.round((item.count / stats.total_sessions) * 100) : 0;
+                return (
+                  <div key={item.type}>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span>{item.label}</span>
+                      <span className="text-slate-500">{item.count} 次 · {percent}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                      <div className="h-full rounded-full bg-emerald-500" style={{ width: `${percent}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 bg-white dark:bg-gray-900">
+          <div className="flex items-center gap-2 mb-3">
+            <Target className="h-4 w-4 text-amber-600" />
+            <h3 className="text-sm font-semibold">低分能力维度</h3>
+          </div>
+          {stats.weak_dimensions.length === 0 ? (
+            <div className="py-3 text-sm text-slate-400">暂无评分数据</div>
+          ) : (
+            <div className="space-y-2">
+              {stats.weak_dimensions.slice(0, 4).map((item) => (
+                <div key={item.dimension} className="flex items-center justify-between text-sm">
+                  <span className="truncate">{item.dimension}</span>
+                  <span className={cn(
+                    "font-semibold",
+                    item.average_score >= 60 ? "text-blue-600" : item.average_score >= 40 ? "text-amber-600" : "text-red-600"
+                  )}>
+                    {item.average_score}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div>
@@ -326,6 +447,438 @@ function DashboardTab({ authHeaders }: { authHeaders: () => Record<string, strin
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function UsersTab({
+  authHeaders,
+  setToast,
+}: {
+  authHeaders: () => Record<string, string>;
+  setToast: (t: any) => void;
+}) {
+  const { user: currentUser } = useAppStore();
+  const [users, setUsers] = useState<{ items: AdminUserItem[]; total: number; page: number; page_size: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [busyId, setBusyId] = useState("");
+
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), page_size: "12" });
+      if (search) params.set("search", search);
+      if (roleFilter) params.set("role", roleFilter);
+      if (statusFilter) params.set("is_active", statusFilter);
+      const res = await fetch(`/api/admin/users?${params}`, { headers: authHeaders() });
+      if (!res.ok) throw new Error("用户列表加载失败");
+      setUsers(await res.json());
+    } catch (e: any) {
+      setToast({ message: e.message || "用户列表加载失败", type: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }, [authHeaders, page, roleFilter, search, statusFilter, setToast]);
+
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  const updateRole = async (target: AdminUserItem, role: "student" | "admin") => {
+    if (target.role === role) return;
+    setBusyId(target.id);
+    try {
+      const res = await fetch(`/api/admin/users/${target.id}/role`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ role }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || "角色更新失败");
+      setToast({ message: "✅ 用户角色已更新", type: "success" });
+      fetchUsers();
+    } catch (e: any) {
+      setToast({ message: e.message || "角色更新失败", type: "error" });
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const updateStatus = async (target: AdminUserItem, isActive: boolean) => {
+    if (target.is_active === isActive) return;
+    const actionText = isActive ? "启用" : "禁用";
+    if (!isActive && !window.confirm(`确定${actionText}用户「${target.username}」吗？`)) return;
+    setBusyId(target.id);
+    try {
+      const res = await fetch(`/api/admin/users/${target.id}/status`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ is_active: isActive }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || `${actionText}失败`);
+      setToast({ message: `✅ 用户已${actionText}`, type: "success" });
+      fetchUsers();
+    } catch (e: any) {
+      setToast({ message: e.message || `${actionText}失败`, type: "error" });
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-[240px] flex-1 relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { setSearch(searchInput.trim()); setPage(1); } }}
+            placeholder="搜索用户名..."
+            className="w-full h-10 pl-10 pr-4 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <select value={roleFilter} onChange={(e) => { setRoleFilter(e.target.value); setPage(1); }}
+          className="h-10 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 text-sm">
+          <option value="">全部角色</option>
+          <option value="student">普通用户</option>
+          <option value="admin">管理员</option>
+        </select>
+        <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          className="h-10 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 text-sm">
+          <option value="">全部状态</option>
+          <option value="true">正常</option>
+          <option value="false">已禁用</option>
+        </select>
+        <Button variant="outline" onClick={fetchUsers}><RefreshCw className="h-4 w-4 mr-1" />刷新</Button>
+      </div>
+
+      {loading ? (
+        <div className="py-12 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto text-blue-600" /></div>
+      ) : users && users.items.length === 0 ? (
+        <div className="py-12 text-center text-slate-400">暂无用户数据</div>
+      ) : users && (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 dark:bg-slate-800/50">
+                <tr>
+                  <th className="text-left px-4 py-3 font-medium">用户</th>
+                  <th className="text-left px-4 py-3 font-medium">角色</th>
+                  <th className="text-left px-4 py-3 font-medium">状态</th>
+                  <th className="text-center px-4 py-3 font-medium">面试</th>
+                  <th className="text-center px-4 py-3 font-medium">均分</th>
+                  <th className="text-left px-4 py-3 font-medium">最近面试</th>
+                  <th className="text-right px-4 py-3 font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {users.items.map((item) => {
+                  const isSelf = item.id === currentUser?.id;
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{item.username}</div>
+                        <div className="text-xs text-slate-500">注册 {formatTime(item.created_at)}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <select
+                          value={item.role}
+                          disabled={busyId === item.id || isSelf}
+                          onChange={(e) => updateRole(item, e.target.value as "student" | "admin")}
+                          className="h-8 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 px-2 text-xs"
+                        >
+                          <option value="student">普通用户</option>
+                          <option value="admin">管理员</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={cn(
+                          "inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium",
+                          item.is_active
+                            ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300"
+                            : "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300"
+                        )}>
+                          {item.is_active ? <UserCheck className="h-3 w-3" /> : <UserX className="h-3 w-3" />}
+                          {item.is_active ? "正常" : "已禁用"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="font-semibold">{item.interview_count}</div>
+                        <div className="text-xs text-slate-500">完成 {item.completed_interview_count}</div>
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold">{item.average_score ?? "--"}</td>
+                      <td className="px-4 py-3 text-slate-500">{item.last_interview_at ? formatTime(item.last_interview_at) : "--"}</td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busyId === item.id || isSelf}
+                          onClick={() => updateStatus(item, !item.is_active)}
+                        >
+                          {busyId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : item.is_active ? <Ban className="h-3.5 w-3.5 mr-1" /> : <ShieldCheck className="h-3.5 w-3.5 mr-1" />}
+                          {item.is_active ? "禁用" : "启用"}
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {users.total > users.page_size && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-800">
+              <span className="text-sm text-slate-500">共 {users.total} 个用户</span>
+              <div className="flex gap-1">
+                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}><ChevronLeft className="h-4 w-4" /></Button>
+                <Button variant="outline" size="sm" disabled={page >= Math.ceil(users.total / users.page_size)} onClick={() => setPage(p => p + 1)}><ChevronRight className="h-4 w-4" /></Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InterviewsTab({
+  authHeaders,
+  setToast,
+}: {
+  authHeaders: () => Record<string, string>;
+  setToast: (t: any) => void;
+}) {
+  const [interviews, setInterviews] = useState<{ items: AdminInterviewItem[]; total: number; page: number; page_size: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [selectedReport, setSelectedReport] = useState<AdminInterviewReport | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AdminInterviewItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const fetchInterviews = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(page), page_size: "12" });
+      if (search) params.set("search", search);
+      if (statusFilter) params.set("status", statusFilter);
+      if (typeFilter) params.set("interview_type", typeFilter);
+      const res = await fetch(`/api/admin/interviews?${params}`, { headers: authHeaders() });
+      if (!res.ok) throw new Error("面试记录加载失败");
+      setInterviews(await res.json());
+    } catch (e: any) {
+      setToast({ message: e.message || "面试记录加载失败", type: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }, [authHeaders, page, search, setToast, statusFilter, typeFilter]);
+
+  useEffect(() => { fetchInterviews(); }, [fetchInterviews]);
+
+  const viewReport = async (item: AdminInterviewItem) => {
+    setLoadingReport(true);
+    try {
+      const res = await fetch(`/api/admin/interviews/${item.session_id}`, { headers: authHeaders() });
+      if (!res.ok) throw new Error((await res.json()).detail || "报告加载失败");
+      setSelectedReport(await res.json());
+    } catch (e: any) {
+      setToast({ message: e.message || "报告加载失败", type: "error" });
+    } finally {
+      setLoadingReport(false);
+    }
+  };
+
+  const deleteInterview = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/interviews/${deleteTarget.session_id}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || "删除失败");
+      setToast({ message: "✅ 面试记录已删除", type: "success" });
+      setDeleteTarget(null);
+      if (selectedReport?.session.session_id === deleteTarget.session_id) setSelectedReport(null);
+      fetchInterviews();
+    } catch (e: any) {
+      setToast({ message: e.message || "删除失败", type: "error" });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-[240px] flex-1 relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { setSearch(searchInput.trim()); setPage(1); } }}
+            placeholder="搜索用户名..."
+            className="w-full h-10 pl-10 pr-4 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          className="h-10 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 text-sm">
+          <option value="">全部状态</option>
+          <option value="completed">已完成</option>
+          <option value="ongoing">进行中</option>
+        </select>
+        <select value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
+          className="h-10 px-3 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 text-sm">
+          <option value="">全部类型</option>
+          <option value="technical">基础技术面</option>
+          <option value="pressure">压力面试</option>
+          <option value="friendly">轻松聊天</option>
+        </select>
+        <Button variant="outline" onClick={fetchInterviews}><RefreshCw className="h-4 w-4 mr-1" />刷新</Button>
+      </div>
+
+      {loading ? (
+        <div className="py-12 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto text-blue-600" /></div>
+      ) : interviews && interviews.items.length === 0 ? (
+        <div className="py-12 text-center text-slate-400">暂无面试记录</div>
+      ) : interviews && (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 dark:bg-slate-800/50">
+                <tr>
+                  <th className="text-left px-4 py-3 font-medium">用户</th>
+                  <th className="text-left px-4 py-3 font-medium">类型</th>
+                  <th className="text-left px-4 py-3 font-medium">状态</th>
+                  <th className="text-center px-4 py-3 font-medium">评分</th>
+                  <th className="text-left px-4 py-3 font-medium">时长</th>
+                  <th className="text-left px-4 py-3 font-medium">开始时间</th>
+                  <th className="text-right px-4 py-3 font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {interviews.items.map((item) => (
+                  <tr key={item.session_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{item.username}</div>
+                      <div className="text-xs text-slate-500">{item.message_count} 条对话</div>
+                    </td>
+                    <td className="px-4 py-3">{item.type_label}</td>
+                    <td className="px-4 py-3">
+                      <span className={cn(
+                        "rounded-full px-2 py-1 text-xs font-medium",
+                        item.status === "completed"
+                          ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300"
+                          : "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"
+                      )}>
+                        {item.status === "completed" ? "已完成" : "进行中"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center font-semibold">{item.average_score ?? "--"}</td>
+                    <td className="px-4 py-3 text-slate-500">{item.duration}</td>
+                    <td className="px-4 py-3 text-slate-500">{item.started_at ? formatTime(item.started_at) : "--"}</td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button variant="outline" size="sm" onClick={() => viewReport(item)} disabled={loadingReport}>
+                          <Eye className="h-3.5 w-3.5 mr-1" />报告
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setDeleteTarget(item)}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {interviews.total > interviews.page_size && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 dark:border-slate-800">
+              <span className="text-sm text-slate-500">共 {interviews.total} 条记录</span>
+              <div className="flex gap-1">
+                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}><ChevronLeft className="h-4 w-4" /></Button>
+                <Button variant="outline" size="sm" disabled={page >= Math.ceil(interviews.total / interviews.page_size)} onClick={() => setPage(p => p + 1)}><ChevronRight className="h-4 w-4" /></Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {selectedReport && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-3xl max-h-[86vh] overflow-y-auto bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-6">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div>
+                <h3 className="text-lg font-semibold">面试报告详情</h3>
+                <p className="text-sm text-slate-500">
+                  {selectedReport.session.username} · {selectedReport.session.type_label} · {selectedReport.session.duration}
+                </p>
+              </div>
+              <button onClick={() => setSelectedReport(null)} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+            </div>
+            {selectedReport.radar_scores ? (
+              <div className="space-y-5">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {Object.entries(selectedReport.radar_scores).filter(([, score]) => typeof score === "number").map(([name, score]) => (
+                    <div key={name}>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>{name}</span>
+                        <span className="font-semibold">{score}</span>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                        <div className="h-full rounded-full bg-blue-600" style={{ width: `${score}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {selectedReport.ai_feedback && (
+                  <div className="space-y-3">
+                    {["总体评价", "核心优势", "薄弱环节", "改进建议"].map((key) => (
+                      selectedReport.ai_feedback?.[key] ? (
+                        <div key={key} className="rounded-xl border border-slate-200 dark:border-slate-800 p-4">
+                          <h4 className="text-sm font-semibold mb-2">{key}</h4>
+                          <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-300 whitespace-pre-line">
+                            {String(selectedReport.ai_feedback[key])}
+                          </p>
+                        </div>
+                      ) : null
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="py-12 text-center text-slate-400">该面试暂无评估报告</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center"><Trash2 className="h-5 w-5 text-red-600" /></div>
+              <div><h3 className="font-semibold">确认删除面试记录</h3><p className="text-sm text-slate-500">关联报告也会被删除</p></div>
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+              {deleteTarget.username} · {deleteTarget.type_label} · {deleteTarget.started_at ? formatTime(deleteTarget.started_at) : "--"}
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)}>取消</Button>
+              <Button variant="destructive" onClick={deleteInterview} disabled={deleting}>
+                {deleting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                确认删除
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

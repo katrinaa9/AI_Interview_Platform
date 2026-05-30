@@ -21,7 +21,7 @@ export function Navbar() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         <div className="flex h-16 items-center justify-between">
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2.5 shrink-0">
+          <Link to={user ? "/" : "/login"} className="flex items-center gap-2.5 shrink-0">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center">
               <Brain className="h-5 w-5 text-white" />
             </div>
@@ -32,21 +32,21 @@ export function Navbar() {
 
           {/* Navigation */}
           <nav className="hidden md:flex items-center gap-1">
-            {navItems.map(({ to, label, icon: Icon }) => (
-              <Link
-                key={to}
-                to={to}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                  location.pathname === to
-                    ? "bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400"
-                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {label}
-              </Link>
-            ))}
+            {user && navItems.map(({ to, label, icon: Icon }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                    location.pathname === to
+                      ? "bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400"
+                      : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </Link>
+              ))}
             {user?.role === "admin" && (
               <Link
                 to="/admin"

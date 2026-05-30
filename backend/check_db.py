@@ -8,6 +8,18 @@ from app.models.database import engine, Base
 from app.models.models import User, Resume, QuestionBank, InterviewSession, EvaluationReport
 
 
+def run_lightweight_migrations(connection):
+    from sqlalchemy import inspect
+
+    inspector = inspect(connection)
+    user_columns = {col["name"] for col in inspector.get_columns("users")}
+    if "is_active" not in user_columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+        print("  已补齐字段: users.is_active")
+
+
 async def check_and_init():
     print("=" * 50)
     print("AceInterviewer 数据库检查与初始化")
@@ -58,6 +70,8 @@ async def check_and_init():
                 print("  创建完成!")
             else:
                 print("  所有表已存在，无需创建")
+            await conn.run_sync(run_lightweight_migrations)
+            await conn.commit()
     except Exception as e:
         print(f"\n  *** 表检查/创建失败 ***")
         print(f"  错误详情: {e}")
