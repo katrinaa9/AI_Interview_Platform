@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { BrowserRouter, Navigate, Outlet, Routes, Route, useLocation } from "react-router-dom";
 import { Navbar } from "@/components/layout/Navbar";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Home from "@/pages/Home";
 import Upload from "@/pages/Upload";
 import Interview from "@/pages/Interview";
@@ -34,23 +35,25 @@ export default function App() {
   }, [theme]);
 
   return (
-    <BrowserRouter>
-      <div className="min-h-screen bg-white dark:bg-gray-950 text-slate-900 dark:text-slate-100 transition-colors">
-        <Navbar />
-        <main>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route element={<RequireAuth />}>
-              <Route path="/" element={<Home />} />
-              <Route path="/upload" element={<Upload />} />
-              <Route path="/interview" element={<Interview />} />
-              <Route path="/report" element={<Report />} />
-              <Route path="/admin" element={<Admin />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </main>
-      </div>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <div className="min-h-screen bg-white dark:bg-gray-950 text-slate-900 dark:text-slate-100 transition-colors">
+          <Navbar />
+          <main>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route element={<RequireAuth />}>
+                <Route path="/" element={<Home />} />
+                <Route path="/upload" element={<Upload />} />
+                <Route path="/interview" element={<Interview />} />
+                <Route path="/report" element={<Report />} />
+                <Route path="/admin" element={<Admin />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+        </div>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

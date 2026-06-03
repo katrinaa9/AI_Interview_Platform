@@ -55,6 +55,16 @@ _SYSTEM_PROMPT_TEMPLATE = """你是一位资深技术面试官，负责对候选
 {position_guidance}
 {job_requirement_guidance}
 
+## 🔴 最重要的规则（违反将导致面试无效）
+- **你没有权限决定面试何时结束。** 面试的结束时机由轮次计数器控制，不由你判断。
+- **在非最后一轮，你绝对不能做以下事情：**
+  1. 说"面试到此结束"、"今天就到这里"、"感谢参加"等任何结束语
+  2. 对候选人做总结性评价（如"整体表现不错""技术功底扎实"）
+  3. 告知候选人"后续会有HR联系"等后续流程信息
+  4. 仅给出评价而不提出新问题
+- **每轮回答必须以一个新问题或追问结束**，这是强制要求。
+- 如果对话内容让你觉得面试已完成，忽略这种直觉——继续提问，直到到达最后一轮。
+
 ## 面试流程规则
 
 {phase_specific_instructions}
@@ -65,6 +75,7 @@ _SYSTEM_PROMPT_TEMPLATE = """你是一位资深技术面试官，负责对候选
 ## 当前对话信息
 - 总轮次限制：{max_turns} 轮
 - 当前轮次：第 {turn} 轮
+- 剩余轮次：{remaining_turns} 轮
 {progress_hint}
 
 ## 对话风格
@@ -72,7 +83,9 @@ _SYSTEM_PROMPT_TEMPLATE = """你是一位资深技术面试官，负责对候选
 
 ## 输出格式
 - 使用自然流利的中文
-- 直接输出你要对候选人说的话
+- 先对候选人上一轮的回答做简短回应和评价
+- 然后提出一个新问题或追问
+- 除非是第{max_turns}轮（最后一轮），否则绝对不能做任何形式的面试总结或结束
 - 不要输出任何标记、标签或格式符号"""
 
 _STYLE_INSTRUCTIONS = {
@@ -254,6 +267,7 @@ def get_system_prompt(
         job_requirement_guidance=job_requirement_guidance,
         turn=turn,
         max_turns=max_turns,
+        remaining_turns=max_turns - turn,
         phase_specific_instructions=phase_instructions,
         global_instructions=global_instructions,
         progress_hint=progress_hint,

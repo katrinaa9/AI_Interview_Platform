@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Send, Mic, Loader2, ArrowLeft, StopCircle,
+  Send, Loader2, ArrowLeft, StopCircle,
   WifiOff, RefreshCw, X, AlertTriangle,
   BriefcaseBusiness, ClipboardList, CheckCircle2,
-  CircleDashed, Gauge,
+  CircleDashed, Gauge, Copy, Check, ArrowDown,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Button } from "@/components/ui/Button";
@@ -172,9 +172,14 @@ export default function Interview() {
   const navigate = useNavigate();
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const textareaWrapperRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const retryCountRef = useRef(0);
   const sessionInitRef = useRef(false);
+  // 拖拽 resize 状态
+  const isResizingRef = useRef(false);
+  const startDragYRef = useRef(0);
+  const startHeightRef = useRef(0);
 
   const {
     keywords,
@@ -196,6 +201,7 @@ export default function Interview() {
   const [streamingContent, setStreamingContent] = useState("");
   const [statusText, setStatusText] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   const interviewProgress = useMemo<InterviewProgress>(() => {
     const userTurnCount = messages.filter((msg) => msg.role === "user").length;
@@ -310,6 +316,20 @@ export default function Interview() {
     }
   }, [messages, streamingContent]);
 
+  // ===== 监听滚动位置，显示/隐藏"滚动到底部"按钮 =====
+  useEffect(() => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      setShowScrollToBottom(scrollHeight - scrollTop - clientHeight > 150);
+    };
+
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, []);
+
   // ===== 核心：发送消息 + SSE 流式接收 + 断线重连 =====
   const sendChatRequest = useCallback(
     async (content: string, attempt: number = 0): Promise<void> => {
@@ -423,6 +443,28 @@ export default function Interview() {
     [sessionId, token, authHeaders, addMessage, setStreaming, addToast, removeToast, toasts]
   );
 
+  const scrollToBottom = useCallback(() => {
+    const container = chatContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    }
+  }, []);
+
+  // ===== 停止生成 =====
+  const handleStopGeneration = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    // 保存已生成的部分内容
+    if (streamingContent.trim()) {
+      addMessage({ role: "assistant", content: streamingContent });
+    }
+    setStreamingContent("");
+    setStatusText("");
+    setStreaming(false);
+  }, [streamingContent, addMessage, setStreaming]);
+
   const handleSend = useCallback(() => {
     const content = inputValue.trim();
     if (!content || isStreaming || !sessionId) return;
@@ -486,12 +528,57 @@ export default function Interview() {
     navigate("/report");
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
+
+  const handleTextareaResize = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      setInputValue(e.target.value);
+      const target = e.target;
+      target.style.height = "auto";
+      target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+    },
+    []
+  );
+
+  // 自定义拖拽 resize 句柄（右上角，参考 Gemini 风格）
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isResizingRef.current = true;
+    startDragYRef.current = e.clientY;
+    const textarea = inputRef.current;
+    if (textarea) {
+      startHeightRef.current = textarea.offsetHeight;
+    }
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "ns-resize";
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const delta = startDragYRef.current - ev.clientY;
+      const newHeight = Math.max(52, Math.min(400, startHeightRef.current + delta));
+      if (textarea) {
+        textarea.style.height = `${newHeight}px`;
+      }
+    };
+
+    const onMouseUp = () => {
+      isResizingRef.current = false;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, []);
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
@@ -603,7 +690,7 @@ export default function Interview() {
           {/* 聊天区域 */}
           <div
             ref={chatContainerRef}
-            className="min-h-0 overflow-y-auto py-6 lg:pr-5 scrollbar-thin"
+            className="min-h-0 overflow-y-auto py-6 lg:pr-5 scrollbar-thin relative"
           >
             <div className="mx-auto w-full max-w-5xl space-y-4">
               <div className="lg:hidden">
@@ -627,6 +714,17 @@ export default function Interview() {
                 />
               )}
             </div>
+
+            {/* 滚动到底部浮动按钮 */}
+            {showScrollToBottom && (
+              <button
+                onClick={scrollToBottom}
+                className="absolute bottom-4 left-1/2 -translate-x-1/2 w-9 h-9 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 transition-all flex items-center justify-center animate-fade-in z-10"
+                title="滚动到底部"
+              >
+                <ArrowDown className="h-4 w-4" />
+              </button>
+            )}
           </div>
 
           <aside className="hidden min-h-0 border-l border-slate-200 dark:border-slate-800 py-6 lg:flex lg:justify-center">
@@ -649,11 +747,23 @@ export default function Interview() {
             )}
 
             <div className="flex items-end gap-2">
-              <div className="flex-1 relative">
+              <div ref={textareaWrapperRef} className="flex-1 relative">
+                {/* 自定义拖拽句柄 — 右上角（Gemini 风格） */}
+                <div
+                  className="absolute top-0 right-3 z-10 flex flex-col items-center gap-[2px] py-[6px] cursor-ns-resize opacity-30 hover:opacity-100 transition-opacity group"
+                  onMouseDown={handleResizeMouseDown}
+                  title="拖拽调整输入框高度"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="拖拽调整输入区域高度"
+                >
+                  <span className="block w-6 h-[2px] rounded-full bg-slate-400 dark:bg-slate-500 group-hover:bg-blue-500 dark:group-hover:bg-blue-400 transition-colors" />
+                  <span className="block w-4 h-[2px] rounded-full bg-slate-400 dark:bg-slate-500 group-hover:bg-blue-500 dark:group-hover:bg-blue-400 transition-colors" />
+                </div>
                 <textarea
                   ref={inputRef}
                   value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
+                  onChange={handleTextareaResize}
                   onKeyDown={handleKeyDown}
                   placeholder={
                     isStreaming
@@ -663,38 +773,37 @@ export default function Interview() {
                       : "输入你的回答... (Enter 发送, Shift+Enter 换行)"
                   }
                   disabled={isStreaming || !sessionId}
-                  rows={2}
                   className={cn(
                     "w-full resize-none rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-gray-900 px-4 py-3 pr-12 text-sm",
+                    "min-h-[52px]",
                     "focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent",
                     "placeholder:text-slate-400 dark:placeholder:text-slate-600",
-                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                    "disabled:opacity-50 disabled:cursor-not-allowed",
+                    "transition-[height] duration-150 ease-out"
                   )}
                 />
               </div>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled={isStreaming || !sessionId}
-                className="shrink-0"
-                title="语音输入（即将上线）"
-              >
-                <Mic className="h-5 w-5" />
-              </Button>
-
-              <Button
-                onClick={handleSend}
-                disabled={!inputValue.trim() || isStreaming || !sessionId}
-                size="icon"
-                className="shrink-0"
-              >
-                {isStreaming ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
+              {isStreaming ? (
+                <Button
+                  onClick={handleStopGeneration}
+                  variant="destructive"
+                  size="icon"
+                  className="shrink-0"
+                  title="停止生成"
+                >
+                  <StopCircle className="h-5 w-5" />
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleSend}
+                  disabled={!inputValue.trim() || !sessionId}
+                  size="icon"
+                  className="shrink-0"
+                >
                   <Send className="h-5 w-5" />
-                )}
-              </Button>
+                </Button>
+              )}
             </div>
           </div>
           <div className="hidden lg:block" />
@@ -805,6 +914,17 @@ function ChatBubble({
   isStreaming?: boolean;
 }) {
   const isUser = message.role === "user";
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback
+    }
+  };
 
   return (
     <div
@@ -821,7 +941,7 @@ function ChatBubble({
 
       <div
         className={cn(
-          "max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
+          "max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed relative group",
           isUser
             ? "bg-blue-600 text-white rounded-br-md"
             : "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 rounded-bl-md"
@@ -833,6 +953,27 @@ function ChatBubble({
           <div className="prose-custom text-sm dark:text-slate-100">
             <ReactMarkdown>{message.content}</ReactMarkdown>
           </div>
+        )}
+
+        {/* 复制按钮 */}
+        {!isUser && !isStreaming && (
+          <button
+            onClick={handleCopy}
+            className={cn(
+              "absolute top-2 right-2 p-1.5 rounded-lg transition-all",
+              "opacity-0 group-hover:opacity-100",
+              "bg-white/80 dark:bg-slate-700/80 hover:bg-white dark:hover:bg-slate-600",
+              "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300",
+              copied && "opacity-100 text-green-500"
+            )}
+            title="复制消息"
+          >
+            {copied ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+          </button>
         )}
 
         {isStreaming && (

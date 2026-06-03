@@ -8,9 +8,11 @@ import {
   Database, Eye, RotateCcw, Copy, Check, UploadCloud,
   File, Activity, UserCog, UserCheck, UserX, BadgeCheck,
   MessageSquare, ShieldCheck, Ban, Award, Target, PieChart,
+  ArrowUpDown, ArrowUp, ArrowDown, Square, CheckSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useAppStore } from "@/store";
+import { DashboardSkeleton, TableSkeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
 
 type TabKey = "dashboard" | "users" | "interviews" | "questions" | "documents" | "prompt" | "logs";
@@ -167,6 +169,75 @@ function formatTime(dateStr: string): string {
   return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+// ===== 排序工具 =====
+type SortOrder = "asc" | "desc" | null;
+
+function SortButton({
+  label,
+  column,
+  sortBy,
+  sortOrder,
+  onSort,
+}: {
+  label: string;
+  column: string;
+  sortBy: string;
+  sortOrder: SortOrder;
+  onSort: (col: string) => void;
+}) {
+  const isActive = sortBy === column;
+  return (
+    <button
+      onClick={() => onSort(column)}
+      className="inline-flex items-center gap-1 font-medium hover:text-blue-600 transition-colors"
+    >
+      {label}
+      {isActive ? (
+        sortOrder === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+      ) : (
+        <ArrowUpDown className="h-3 w-3 opacity-40" />
+      )}
+    </button>
+  );
+}
+
+function useSortState() {
+  const [sortBy, setSortBy] = useState("");
+  const [sortOrder, setSortOrder] = useState<SortOrder>(null);
+
+  const handleSort = (col: string) => {
+    if (sortBy === col) {
+      if (sortOrder === "asc") {
+        setSortOrder("desc");
+      } else if (sortOrder === "desc") {
+        setSortBy("");
+        setSortOrder(null);
+      }
+    } else {
+      setSortBy(col);
+      setSortOrder("asc");
+    }
+  };
+
+  return { sortBy, sortOrder, handleSort };
+}
+
+function sortItems<T>(items: T[], sortBy: string, sortOrder: SortOrder): T[] {
+  if (!sortBy || !sortOrder) return items;
+  return [...items].sort((a, b) => {
+    const aVal = (a as any)[sortBy];
+    const bVal = (b as any)[sortBy];
+    if (aVal == null) return 1;
+    if (bVal == null) return -1;
+    if (typeof aVal === "string") {
+      const cmp = aVal.localeCompare(bVal, "zh-CN");
+      return sortOrder === "asc" ? cmp : -cmp;
+    }
+    const cmp = aVal - bVal;
+    return sortOrder === "asc" ? cmp : -cmp;
+  });
+}
+
 function Toast({ message, type, onClose }: { message: string; type: "success" | "error"; onClose: () => void }) {
   useEffect(() => {
     const t = setTimeout(onClose, 3000);
@@ -292,7 +363,7 @@ function DashboardTab({ authHeaders }: { authHeaders: () => Record<string, strin
 
   useEffect(() => { fetchStats(); }, [fetchStats]);
 
-  if (loading) return <div className="py-12 text-center"><Loader2 className="h-6 w-6 animate-spin mx-auto text-blue-600" /></div>;
+  if (loading) return <DashboardSkeleton />;
   if (!stats) return <div className="py-12 text-center text-slate-400">加载失败</div>;
 
   const cards = [
@@ -467,6 +538,7 @@ function UsersTab({
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [busyId, setBusyId] = useState("");
+  const { sortBy, sortOrder, handleSort } = useSortState();
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -560,22 +632,25 @@ function UsersTab({
       ) : users && users.items.length === 0 ? (
         <div className="py-12 text-center text-slate-400">暂无用户数据</div>
       ) : users && (
+        (() => {
+          const sortedItems = sortItems(users.items, sortBy, sortOrder);
+          return (
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 dark:bg-slate-800/50">
                 <tr>
-                  <th className="text-left px-4 py-3 font-medium">用户</th>
+                  <th className="text-left px-4 py-3"><SortButton label="用户" column="username" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
                   <th className="text-left px-4 py-3 font-medium">角色</th>
                   <th className="text-left px-4 py-3 font-medium">状态</th>
-                  <th className="text-center px-4 py-3 font-medium">面试</th>
-                  <th className="text-center px-4 py-3 font-medium">均分</th>
-                  <th className="text-left px-4 py-3 font-medium">最近面试</th>
+                  <th className="text-center px-4 py-3"><SortButton label="面试" column="interview_count" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-center px-4 py-3"><SortButton label="均分" column="average_score" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-left px-4 py-3"><SortButton label="最近面试" column="last_interview_at" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
                   <th className="text-right px-4 py-3 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {users.items.map((item) => {
+                {sortedItems.map((item) => {
                   const isSelf = item.id === currentUser?.id;
                   return (
                     <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
@@ -638,6 +713,8 @@ function UsersTab({
             </div>
           )}
         </div>
+        );
+      })()
       )}
     </div>
   );
@@ -661,6 +738,7 @@ function InterviewsTab({
   const [loadingReport, setLoadingReport] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AdminInterviewItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const { sortBy, sortOrder, handleSort } = useSortState();
 
   const fetchInterviews = useCallback(async () => {
     setLoading(true);
@@ -748,22 +826,25 @@ function InterviewsTab({
       ) : interviews && interviews.items.length === 0 ? (
         <div className="py-12 text-center text-slate-400">暂无面试记录</div>
       ) : interviews && (
+        (() => {
+          const sortedItems = sortItems(interviews.items, sortBy, sortOrder);
+          return (
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 dark:bg-slate-800/50">
                 <tr>
-                  <th className="text-left px-4 py-3 font-medium">用户</th>
-                  <th className="text-left px-4 py-3 font-medium">类型</th>
+                  <th className="text-left px-4 py-3"><SortButton label="用户" column="username" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-left px-4 py-3"><SortButton label="类型" column="type_label" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
                   <th className="text-left px-4 py-3 font-medium">状态</th>
-                  <th className="text-center px-4 py-3 font-medium">评分</th>
+                  <th className="text-center px-4 py-3"><SortButton label="评分" column="average_score" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
                   <th className="text-left px-4 py-3 font-medium">时长</th>
-                  <th className="text-left px-4 py-3 font-medium">开始时间</th>
+                  <th className="text-left px-4 py-3"><SortButton label="开始时间" column="started_at" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
                   <th className="text-right px-4 py-3 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {interviews.items.map((item) => (
+                {sortedItems.map((item) => (
                   <tr key={item.session_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
                     <td className="px-4 py-3">
                       <div className="font-medium">{item.username}</div>
@@ -808,6 +889,8 @@ function InterviewsTab({
             </div>
           )}
         </div>
+        );
+      })()
       )}
 
       {selectedReport && (
@@ -897,6 +980,9 @@ function QuestionsTab({ authHeaders, setToast }: { authHeaders: () => Record<str
   const [deleteTarget, setDeleteTarget] = useState<QuestionItem | null>(null);
   const [deleting, setDeleting] = useState(false);
   const fetchingRef = useRef(false);
+  const { sortBy, sortOrder, handleSort } = useSortState();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const fetchQuestions = useCallback(async () => {
     if (fetchingRef.current) return;
@@ -946,6 +1032,44 @@ function QuestionsTab({ authHeaders, setToast }: { authHeaders: () => Record<str
     } catch { setToast({ message: "删除失败", type: "error" }); } finally { setDeleting(false); }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (!questions) return;
+    if (selectedIds.size === questions.items.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(questions.items.map((q) => q.id)));
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`确定删除选中的 ${selectedIds.size} 道题目吗？此操作不可撤销。`)) return;
+    setBatchDeleting(true);
+    try {
+      let failed = 0;
+      for (const id of selectedIds) {
+        const res = await fetch(`/api/admin/questions/${id}`, { method: "DELETE", headers: authHeaders() });
+        if (!res.ok) failed++;
+      }
+      setSelectedIds(new Set());
+      if (failed > 0) {
+        setToast({ message: `✅ 成功删除 ${selectedIds.size - failed} 道，${failed} 道失败`, type: "error" });
+      } else {
+        setToast({ message: `✅ 已批量删除 ${selectedIds.size} 道题目`, type: "success" });
+      }
+      fetchQuestions();
+    } catch { setToast({ message: "批量删除失败", type: "error" }); } finally { setBatchDeleting(false); }
+  };
+
   return (
     <div>
       <div className="flex flex-wrap gap-3 mb-4 items-center">
@@ -960,6 +1084,12 @@ function QuestionsTab({ authHeaders, setToast }: { authHeaders: () => Record<str
           <option value="">全部标签</option>
           {["React", "Vue", "TypeScript", "JavaScript", "Python", "Java", "MySQL", "Redis", "Docker"].map(c => <option key={c} value={c}>{c}</option>)}
         </select>
+        {selectedIds.size > 0 && (
+          <Button variant="destructive" onClick={handleBatchDelete} disabled={batchDeleting}>
+            {batchDeleting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Trash2 className="h-4 w-4 mr-1" />}
+            删除选中 ({selectedIds.size})
+          </Button>
+        )}
         <Button onClick={() => { setEditingId(null); setFormData({ category: "", question_text: "", reference_answer: "", difficulty: "medium" }); setShowForm(true); }}>
           <Plus className="h-4 w-4 mr-1" />新增题目
         </Button>
@@ -970,22 +1100,41 @@ function QuestionsTab({ authHeaders, setToast }: { authHeaders: () => Record<str
       ) : questions && questions.items.length === 0 ? (
         <div className="py-12 text-center text-slate-400">暂无题目数据</div>
       ) : questions && (
+        (() => {
+          const sortedItems = sortItems(questions.items, sortBy, sortOrder);
+          return (
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 dark:bg-slate-800/50">
                 <tr>
-                  <th className="text-left px-4 py-3 font-medium">题目</th>
-                  <th className="text-left px-4 py-3 font-medium w-24">标签</th>
-                  <th className="text-left px-4 py-3 font-medium w-16">难度</th>
-                  <th className="text-center px-4 py-3 font-medium w-16">抽取</th>
-                  <th className="text-center px-4 py-3 font-medium w-16">错误</th>
-                  <th className="text-right px-4 py-3 font-medium w-24">操作</th>
+                  <th className="px-3 py-3 w-10">
+                    <button onClick={toggleSelectAll} className="text-slate-400 hover:text-blue-600">
+                      {selectedIds.size === questions.items.length && questions.items.length > 0
+                        ? <CheckSquare className="h-4 w-4 text-blue-600" />
+                        : <Square className="h-4 w-4" />
+                      }
+                    </button>
+                  </th>
+                  <th className="text-left px-4 py-3"><SortButton label="题目" column="question_text" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-left px-4 py-3 w-24"><SortButton label="标签" column="category" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-left px-4 py-3 w-16"><SortButton label="难度" column="difficulty" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-center px-4 py-3 w-16"><SortButton label="抽取" column="times_asked" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-center px-4 py-3 w-16"><SortButton label="错误" column="times_wrong" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} /></th>
+                  <th className="text-right px-4 py-3 w-24 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {questions.items.map((q) => (
-                  <tr key={q.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                {sortedItems.map((q) => (
+                  <tr key={q.id} className={cn("hover:bg-slate-50 dark:hover:bg-slate-800/30", selectedIds.has(q.id) && "bg-blue-50 dark:bg-blue-950/20")}>
+                    <td className="px-3 py-3">
+                      <button onClick={() => toggleSelect(q.id)} className="text-slate-400 hover:text-blue-600">
+                        {selectedIds.has(q.id)
+                          ? <CheckSquare className="h-4 w-4 text-blue-600" />
+                          : <Square className="h-4 w-4" />
+                        }
+                      </button>
+                    </td>
                     <td className="px-4 py-3"><div className="max-w-md truncate">{q.question_text}</div></td>
                     <td className="px-4 py-3"><span className="px-2 py-0.5 rounded text-xs bg-slate-100 dark:bg-slate-800">{q.category}</span></td>
                     <td className="px-4 py-3"><span className={cn("px-2 py-0.5 rounded text-xs font-medium", DIFFICULTY_COLORS[q.difficulty])}>{DIFFICULTY_LABELS[q.difficulty]}</span></td>
@@ -1012,6 +1161,8 @@ function QuestionsTab({ authHeaders, setToast }: { authHeaders: () => Record<str
             </div>
           )}
         </div>
+        );
+      })()
       )}
 
       {showForm && (

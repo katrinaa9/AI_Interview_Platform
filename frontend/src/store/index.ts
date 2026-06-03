@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { User, InterviewSession, ChatMessage, InterviewType } from "@/types";
 
 interface AppState {
@@ -46,71 +47,83 @@ interface AppState {
   resetInterview: () => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  theme: "light",
-  toggleTheme: () =>
-    set((s) => ({
-      theme: s.theme === "light" ? "dark" : "light",
-    })),
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
+      theme: "light",
+      toggleTheme: () =>
+        set((s) => ({
+          theme: s.theme === "light" ? "dark" : "light",
+        })),
 
-  user: null,
-  token: null,
-  setAuth: (user, token) =>
-    set({
-      user,
-      token,
-      keywords: [],
-      jobTitle: "",
-      jobDescription: "",
-      interviewType: "technical",
-      sessionId: null,
-      session: null,
-      messages: [],
-      isStreaming: false,
-    }),
-  logout: () =>
-    set({
       user: null,
       token: null,
+      setAuth: (user, token) =>
+        set({
+          user,
+          token,
+          keywords: [],
+          jobTitle: "",
+          jobDescription: "",
+          interviewType: "technical",
+          sessionId: null,
+          session: null,
+          messages: [],
+          isStreaming: false,
+        }),
+      logout: () =>
+        set({
+          user: null,
+          token: null,
+          keywords: [],
+          jobTitle: "",
+          jobDescription: "",
+          interviewType: "technical",
+          sessionId: null,
+          session: null,
+          messages: [],
+          isStreaming: false,
+        }),
+
       keywords: [],
+      setKeywords: (keywords) => set({ keywords }),
+
       jobTitle: "",
       jobDescription: "",
+      setJobContext: (jobTitle, jobDescription) => set({ jobTitle, jobDescription }),
+
       interviewType: "technical",
+      setInterviewType: (interviewType) => set({ interviewType }),
+
       sessionId: null,
+      setSessionId: (sessionId) => set({ sessionId }),
+
       session: null,
+      setSession: (session) => set({ session }),
+
       messages: [],
+      addMessage: (msg) =>
+        set((s) => ({ messages: [...s.messages, msg] })),
+      clearMessages: () => set({ messages: [] }),
+
       isStreaming: false,
+      setStreaming: (isStreaming) => set({ isStreaming }),
+
+      resetInterview: () =>
+        set({
+          sessionId: null,
+          session: null,
+          messages: [],
+          isStreaming: false,
+        }),
     }),
-
-  keywords: [],
-  setKeywords: (keywords) => set({ keywords }),
-
-  jobTitle: "",
-  jobDescription: "",
-  setJobContext: (jobTitle, jobDescription) => set({ jobTitle, jobDescription }),
-
-  interviewType: "technical",
-  setInterviewType: (interviewType) => set({ interviewType }),
-
-  sessionId: null,
-  setSessionId: (sessionId) => set({ sessionId }),
-
-  session: null,
-  setSession: (session) => set({ session }),
-
-  messages: [],
-  addMessage: (msg) =>
-    set((s) => ({ messages: [...s.messages, msg] })),
-  clearMessages: () => set({ messages: [] }),
-
-  isStreaming: false,
-  setStreaming: (isStreaming) => set({ isStreaming }),
-
-  resetInterview: () =>
-    set({
-      sessionId: null,
-      session: null,
-      messages: [],
-      isStreaming: false,
-    }),
-}));
+    {
+      name: "auth-storage",
+      partialize: (state) => ({
+        token: state.token,
+        user: state.user,
+        theme: state.theme,
+      }),
+    }
+  )
+);

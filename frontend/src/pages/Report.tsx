@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { RadarChart } from "@/components/chart/RadarChart";
 import { useAppStore } from "@/store";
+import { ReportSkeleton } from "@/components/ui/Skeleton";
 import type { EvaluationReport, ReportHistoryItem, EvidenceFeedbackItem } from "@/types";
 import { cn } from "@/lib/utils";
 
@@ -193,14 +194,7 @@ export default function Report() {
   };
 
   if (loading && activeSessionId && !report) {
-    return (
-      <div className="max-w-5xl mx-auto px-4 py-20 text-center animate-fade-in">
-        <Loader2 className="h-10 w-10 animate-spin mx-auto mb-4 text-blue-600" />
-        <p className="text-slate-600 dark:text-slate-400 text-lg">
-          {historyLoading ? "正在加载面试记录..." : "AI 正在分析面试表现，生成评估报告..."}
-        </p>
-      </div>
-    );
+    return <ReportSkeleton />;
   }
 
   if (!activeSessionId && !historyLoading) {
